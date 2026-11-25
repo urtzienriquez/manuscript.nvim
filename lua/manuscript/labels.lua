@@ -29,8 +29,8 @@ end
 -- LaTeX with its references to labels it doesn't define (\ref, \ref*, \eqref, \pageref) replaced by
 -- their numbers in `labels`; the others stay.
 function M.resolve(tex, labels)
-  local own = {}
-  for label in tex:gmatch("\\label%s*{([^}]+)}") do
+  local own = {} -- (the labels it defines: not those in its comments)
+  for label in require("manuscript.latex").strip_comments(tex):gmatch("\\label%s*{([^}]+)}") do
     own[label] = true
   end
   local function number(cmd, label, star)

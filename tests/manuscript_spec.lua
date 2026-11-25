@@ -241,6 +241,8 @@ describe("the numbers of references to other parts", function()
       .. "\\ref{sec:own}, \\ref{nowhere}. \\label{sec:own}\\refstepcounter{x}"
     assert.equal("See \\textbf{Appendix 1}, Section~2 on page 5, (3); \\ref{sec:own}, \\ref{nowhere}. \\label{sec:own}\\refstepcounter{x}",
       labels.resolve(tex, l))
+    -- a label in a comment isn't one the text defines
+    assert.equals("% \\label{sec:app} there\nSee 2.", labels.resolve("% \\label{sec:app} there\nSee \\ref{sec:app}.", l))
   end)
 end)
 
@@ -950,6 +952,24 @@ describe("a build", function()
     assert.falsy(main:find("Only in the appendix", 1, true))
     assert.same({}, vim.tbl_filter(function(n) return n:match("^_manuscript") end, vim.fn.readdir(dir)))
     assert.truthy(read(dir .. "/1_index.Rnw"):find("eval=FALSE>>=", 1, true))
+    -- the whole again only when a file outside the part changed (its numbering): not for the part
+    local function snapshot_time()
+      local st = vim.uv.fs_stat(dir .. "/.build/1_index-labels.aux")
+      return st.mtime.sec + st.mtime.nsec / 1e9
+    end
+    local before = snapshot_time()
+    vim.wait(20)
+    write(dir .. "/2_main.Rnw", "% !TeX root = 1_index.Rnw\n\\section{Main}\nSee Section~\\ref{sec:app}: \\Sexpr{6 * 7}!\n")
+    assert.is_true(make(), why())
+    assert.equals(before, snapshot_time())
+    vim.wait(20)
+    write(dir .. "/3_appendix1.Rnw", "\\section{First}\n\\section{Appendix}\\label{sec:app}\nOnly in the appendix.\n")
+    assert.is_true(make(), why())
+    assert.truthy(snapshot_time() > before)
+    assert.truthy(read(dir .. "/.build/main/main.tex"):find("See Section~3: 42!", 1, true))
+    write(dir .. "/3_appendix1.Rnw", "\\section{Appendix}\\label{sec:app}\nOnly in the appendix.\n")
+    write(dir .. "/2_main.Rnw", "% !TeX root = 1_index.Rnw\n\\section{Main}\nSee Section~\\ref{sec:app}: \\Sexpr{6 * 7}.\n")
+    assert.is_true(make(), why())
     -- builds leave nothing beside the sources but their PDFs: the rest is in .build/
     local function beside(name)
       return vim.tbl_filter(function(n)

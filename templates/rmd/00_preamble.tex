@@ -55,9 +55,12 @@
 \makeatother
 
 % an appendix: its own page, references, and numbers (Figure S1.1, Table S1.1)
+% (the appendix's number: a label after its title block refers to it, "1")
+\newcounter{appendix}
 \newcommand{\appendixsetup}[1]{
   \newpage
   \newrefsection
+  \setcounter{appendix}{#1}\addtocounter{appendix}{-1}\refstepcounter{appendix}
   \setcounter{section}{0}
   \renewcommand{\theHsection}{app#1.\arabic{section}}
   \renewcommand{\thefigure}{S#1.\arabic{figure}}

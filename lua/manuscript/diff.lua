@@ -219,7 +219,7 @@ function M.run(args, on_done)
     job.title(part and "diff " .. part.name or "diff")
     require("manuscript.figures").update(project)
     local cache = require("manuscript.export").cache(project, "diff")
-    if part and not require("manuscript.build").has_labels(project) then -- (as a build: the numbers of its references)
+    if part and not require("manuscript.build").has_labels(project, part) then -- (as a build: the numbers of its references)
       local ok, err = pcall(require("manuscript.build").make, project, { label = "the whole first (for the numbers of references)" })
       knit.clean(project.dir)
       if not ok then

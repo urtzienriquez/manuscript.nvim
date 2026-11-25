@@ -435,7 +435,7 @@ function M.run(args, on_done)
       -- 1. the main text (or the whole), built with the variant
       local several = #project.parts > 1 and settings.appendices ~= "inline"
       local main = several and (vim.iter(project.parts):find(function(p) return p.name == "main" end) or project.parts[1]) or nil
-      if main and not build.has_labels(project) then
+      if main and not build.has_labels(project, main) then
         job.range(0, 15)
         build.make(project, { label = "the whole first (for the numbers of references)" })
       end

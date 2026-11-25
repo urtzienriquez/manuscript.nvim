@@ -216,9 +216,34 @@ end
 
 M.make = make
 
--- Whether the whole has been built (its labels: the numbers of a part's references to the others).
-function M.has_labels(project)
-  return vim.uv.fs_stat(require("manuscript.labels").snapshot(project)) ~= nil
+-- Whether the labels of the whole (the numbers of a part's references to the others) are up to
+-- date for building `part`: the whole was built since any file outside that part changed (the root,
+-- the preamble, another part: their numbering). Edits to the part itself don't matter: building it
+-- doesn't make the whole again. Without `part`: whether the whole was built at all.
+function M.has_labels(project, part)
+  local st = vim.uv.fs_stat(require("manuscript.labels").snapshot(project))
+  if not st or not part then
+    return st ~= nil
+  end
+  local others, own = {}, {} -- (a part's files: but those of the other parts, as a .tex root's own part has them)
+  for _, p in ipairs(project.parts) do
+    if p ~= part then
+      others[p.file] = true
+      for _, f in ipairs(project_.files(p.file, project.dir)) do
+        others[f] = true
+      end
+    end
+  end
+  for _, f in ipairs(vim.list_extend({ part.file }, project_.files(part.file, project.dir))) do
+    own[f] = not others[f] or nil
+  end
+  for _, f in ipairs(project.files) do
+    local fs = not own[f] and vim.uv.fs_stat(f)
+    if fs and (fs.mtime.sec > st.mtime.sec or fs.mtime.sec == st.mtime.sec and fs.mtime.nsec > st.mtime.nsec) then
+      return false
+    end
+  end
+  return true
 end
 
 -- :Manuscript build [part|all] [variant] [name.pdf]: the part of the current file (or the whole);
@@ -280,7 +305,7 @@ function M.run(args, on_done)
     job.title("build " .. name)
     require("manuscript.figures").update(project)
     local ok, made = pcall(function()
-      if part and not M.has_labels(project) then
+      if part and not M.has_labels(project, part) then
         make(project, { label = "the whole first (for the numbers of references)" })
       end
       return make(project, { part = part, job = name, variant = variant })
