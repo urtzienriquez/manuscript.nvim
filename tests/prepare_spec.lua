@@ -42,6 +42,13 @@ describe("manuscript.prepare", function()
     end)
   end)
   describe("tables", function()
+    it("unwraps \\pandocbounded (pandoc 3.2+'s images in rmarkdown's LaTeX)", function()
+      local tex = "\\begin{document}\n\\begin{figure}\n\\pandocbounded{\\includegraphics[keepaspectratio]{/tmp/fig/points-1.pdf}}\n\\caption{Some points.}\n\\end{figure}\n\\end{document}\n"
+      local out = prepare.prepare(tex, { name = "main" })
+      assert.falsy(out:find("pandocbounded", 1, true), out)
+      assert.truthy(out:find("\\includegraphics%b[]{/tmp/fig/points%-1"), out)
+    end)
+
     it("unwraps \\resizebox and \\multirow", function()
       local tex = "\\begin{document}\n\\resizebox{\\textwidth}{!}{\\begin{tabular}{ll}\n\\multirow{2}{*}{Group {A}} & a \\\\\n\\multirow{3}{4cm}[2pt]{Other} & b\\\\\n\\cmidrule(lr){1-2}\\addlinespace[2pt]\n\\end{tabular}}\n\\end{document}\n"
       local want = "\\begin{document}\n\\begin{tabular}{ll}\nGroup {A} & a \\\\\nOther & b\\\\\n\n\\end{tabular}\n\\end{document}\n"

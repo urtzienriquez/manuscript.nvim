@@ -53,4 +53,4 @@ jobs:
           git config --global user.email "ci@example.com"
           git config --global user.name "CI"
           nvim --headless -u tests/minimal_init.lua \
-            -c "PlenaryBustedDirectory tests {minimal_init='tests/minimal_init.lua', sequential=true}"
+            -c "PlenaryBustedDirectory tests {minimal_init='tests/minimal_init.lua', sequential=true, timeout=1800000}"

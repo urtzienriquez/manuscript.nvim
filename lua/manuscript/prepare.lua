@@ -768,6 +768,8 @@ local function preprocess(content, render)
 
   -- \resizebox{w}{h}{content} -> content (pandoc cannot read tables inside it)
   content = unwrap_command(content, "\\resizebox", 3, 2)
+  -- (pandoc 3.2+, rmarkdown's images: \pandocbounded{\includegraphics[keepaspectratio]{x}})
+  content = unwrap_command(content, "\\pandocbounded", 1, 0)
 
   -- siunitx, in the document body only. Without \begin{document} Python's
   -- find() gives -1 and only the last character is scanned.
