@@ -1,4 +1,4 @@
-*manuscript.txt*  A LaTeX or Rnoweb manuscript's round trip with Word
+*manuscript.txt*  A LaTeX, Noweb or R Markdown manuscript's trip through Word
 
 Author:  Urtzi Enriquez-Urzelai
 License: GPL-3.0
@@ -6,23 +6,29 @@ License: GPL-3.0
 ==============================================================================
 INTRODUCTION                                                      *manuscript*
 
-manuscript.nvim takes a manuscript written in LaTeX or Rnoweb (knitr's .Rnw)
-through a review with collaborators who use Word, and back:
+manuscript.nvim takes a manuscript written in LaTeX, Rnoweb (knitr's .Rnw),
+R Markdown (.Rmd) or jnoweb (Knit.jl's .jnw: LaTeX with Julia chunks), in
+one file or several, from its first line to its publication. All four work
+the same way, with the same commands:
 
-  0. |:Manuscript| build      while you write: the PDF of the part you are in,
-                              or of the whole, in the background
-  1. |:Manuscript| export     Word files, one per part, in export/<date>/
-  2. review                   rounds of edits and comments, in Word or in
-                              neoffice.nvim: accept, reject, comment, send
-                              back... as you like
-  3. |:Manuscript| merge      open the last Word file, wherever it is, and
-                              bring its edits into your sources, in a diff
-  4. |:Manuscript| diff       a PDF with the changes since what you sent, as
-                              tracked changes (for a journal's resubmission)
+  |:Manuscript| new         a new manuscript, from a template
+  |:Manuscript| build       while you write: the PDF of the part you are in,
+                            or of the whole, or of a variant of it (anon,
+                            review, a journal's), in the background
+  |:Manuscript| export      Word files for your collaborators, one per part
+  |:Manuscript| merge       their edits back into your sources, in a diff
+  |:Manuscript| submit      what a journal asks for: the PDFs, and a zip of
+                            the LaTeX that compiles them, anonymous or not
+  |:Manuscript| diff        a PDF with the changes since what you sent or
+                            submitted, as tracked changes
+  |:Manuscript| respond     the response to the reviewers, a point for each
+                            of their comments
+  |:Manuscript| archive     the code and data of its repository, zipped
 
 It defines one command, |:Manuscript|, and no keymaps (see
 |manuscript-keymaps|). Nothing is written in your manuscript's folder but
-export/ and diff/, which keep themselves out of git.
+the PDFs you build, and .build/, export/, submission/ and diff/, which keep
+themselves out of git.
 
                                                          *manuscript-progress*
 Builds, exports and diffs run in the background, each with one message
@@ -35,56 +41,91 @@ such as fidget, the terminal (as a progress bar, if it supports it), or the
 Before 0.12, a notification per step.
 
 Requires Nvim 0.10+, neoffice.nvim (it reads Word files) and pandoc. For .Rnw
-files: R with knitrmini (or knitr). For |manuscript-diff|: latexdiff and
-latexmk.
+and .Rmd files: R with knitrmini (or knitr, or rmarkdown: see
+|manuscript-knit|); for .jnw files: Julia with Knit.jl. For builds and
+|manuscript-diff|: latexmk (and latexdiff).
 
 ==============================================================================
 THE MANUSCRIPT                                            *manuscript-project*
 
-Its root is the file that is compiled: the one a `% !TeX root = ...` line of
-the current file names, the current file if it has `\begin{document}`, or the
-one such file in its folder (an .Rnw before a .tex: a .tex beside an .Rnw is
-its knitted output).
+Its root is the file that is compiled: a .tex, .Rnw or .jnw with
+`\begin{document}`, or an .Rmd with a YAML header (`---` on its first line).
+From any file of the manuscript it is found: the one a `% !TeX root = ...`
+line names, the file itself if it is a root, the root in its folder (or a
+folder up to three above) that includes it, or the one root in its folder (an
+.Rnw, .Rmd or .jnw before a .tex: a .tex beside one is its knitted output).
 
-An .Rnw root's parts are its child chunks, in order, each named after its
-file without a leading number: >
+Its parts, each built alone into its own PDF and exported into its own Word
+file:
+  .Rnw     its child chunks, in order, named after their files without a
+  .jnw     leading number: `<<child='2_main.Rnw'>>=` is the part "main"
+  .Rmd     its child chunks: ```` ```{r child="1-main-text.Rmd"} ```` is
+           "main-text"
+  .tex     its `\include{}`s ("appendix1"), and the root itself, as "main",
+           if its body has text of its own besides them
+  else     the root alone.
 
-  <<child='2_main.Rnw', eval=FALSE>>=          " the part "main"
-  <<child='3_appendix1.Rnw', eval=FALSE>>=     " the part "appendix1"
-<
-A .tex root is one part. The .bib files are those of its `\addbibresource{}`
-and `\bibliography{}` (or else those in its folder).
+Its files are the root, the parts and every `\input{}` and `\include{}` in
+them (recursively): what the merge edits, what a diff compares. An
+`\input{intro}` is text of whatever includes it, not a part of its own.
+
+The .bib files are those of its `\addbibresource{}` and `\bibliography{}`, and
+of an .Rmd's YAML `bibliography:` (a file or a list; relative or absolute),
+or else those in its folder.
 
 ==============================================================================
 BUILD                                                       *manuscript-build*
 
-:Manuscript build [{part}|all] [{name}.pdf] makes the PDF as you would by hand
-(`knitrmini::knit(root, output = ..., engine = "lualatex")`), in the
-background: you go on writing, and it says when it's ready.
+:Manuscript build [{part}|all] [{variant}] [{name}.pdf] makes the PDF as you
+would by hand (knit, then LaTeX), in the background: you go on writing, and
+it says when it's ready.
 
   :Manuscript build            the part of the file you are in (main.pdf from
                                2_main.Rnw), or the whole if you are in the
                                root (1_index.pdf)
   :Manuscript build appendix1  that part
   :Manuscript build all        the whole manuscript
+  :Manuscript build anon       the part you are in, anonymous: main-anon.pdf
+                               (|manuscript-variants|)
   :Manuscript build main main_v2.pdf
                                that part, as main_v2.pdf (main.pdf stays as
                                it was)
 
-With a {name}.pdf, the build is made under that name, beside the root:
-{name}.tex, {name}.pdf and latexmk's files; the usual PDF is left as it was.
-The first build of a name runs LaTeX from scratch; the next ones are as fast
-as the usual. A name only (no folder), and not another part's.
+Only the PDF is written beside the root: the knitted .tex and LaTeX's files
+are in .build/<part>/ (.build/ keeps itself out of git), where the next build
+finds them, so that it only reruns what it must. With a {name}.pdf, the
+build is made under that name; the usual PDF is left as it was. A name only
+(no folder), and not another part's.
 
 A part is knitted from a copy of the root with only its child chunk
-evaluated: no more setting `eval=FALSE` by hand, nor naming the output. Its
-.tex and PDF are written beside the root, as <part>.tex and <part>.pdf, with
-latexmk's auxiliary files: the next build only reruns what it must (a text
-edit: a LaTeX pass and a second of knitting). A build of the whole keeps the
-labels of all the parts (<root>-labels.aux, knitrmini's snapshot), with which
-a part's references to the others get their numbers; a part built before any
-build of the whole makes one first. An export reuses it too, when it's newer
-than the sources.
+evaluated: no more setting `eval=FALSE` by hand, nor naming the output. A
+part of a .tex root is a copy of it with the other parts left out.
+
+                                                             *manuscript-knit*
+What knits each kind (the option `knit` chooses another):
+  .Rnw     knitrmini if installed, else knitr
+  .Rmd     knitrmini (a version that knits .Rmd files: else rmarkdown), the
+           same way as an .Rnw: chunks as LaTeX, the prose through pandoc
+           (no template), the document from its YAML
+           header's `documentclass`, `classoption`, `preamble` (files
+           `\input` before `\begin{document}`), `header-includes`,
+           `bibliography`, `biblatex`, `title`, `author`, `date` and
+           `abstract`. With an `output:` in its YAML header (a bookdown
+           format, a template...), or `knit = "rmarkdown"`: rendered with
+           rmarkdown in that format, into a .tex that latexmk builds.
+  .jnw     Knit.jl, in a Julia worker: one hidden Julia per manuscript's
+           folder, started at its first build and kept until Nvim exits, so
+           Julia and the packages a document loads start once (the first
+           build takes seconds; the next, under one). Its command is the
+           option `julia`, run with `--project=@.` (the document's
+           environment, else your default one, where Knit.jl must be).
+  .tex     latexmk.
+
+A text edit rebuilds in a LaTeX pass and a second of knitting. A build of
+the whole keeps the labels of all the parts (.build/<root>-labels.aux), with
+which a part's references to the others get their numbers; a part built
+before any build of the whole makes one first. An export reuses it too, when
+it's newer than the sources.
 
 The PDF opens the first time (with |vim.ui.open()|); viewers such as zathura
 or sioyek reload it by themselves after that. LaTeX's errors go to the
@@ -95,11 +136,32 @@ while another runs follows it (two at once would write the same files).
 :Manuscript build watch builds when a file of a manuscript (.Rnw, .tex, .bib)
 is written; again, it stops (`build_on_save = true` from the start).
 
-:Manuscript clean removes the auxiliary files of every build of the
-manuscript (the whole, each part, and those under other names: latexmk's
-files, the .synctex.gz) and the labels of the whole; :Manuscript clean {part}
-(or {name}), those of that build only. The knitted .tex and the PDF stay. (After a clean, the next build of a
-part builds the whole first.)
+:Manuscript clean removes .build/ (every build's files, and the labels of
+the whole); :Manuscript clean {part} (or {name}: a variant's build,
+main-anon, or one under a name), those of that build only. The PDFs stay.
+(After a clean, the next build of a part builds the whole first.) Files that
+builds left beside the root before .build/ existed go too.
+
+                                                        *manuscript-figures*
+Standalone LaTeX figures (a TikZ figure in `figures_manuscript/fig1.tex`, a
+document of its own that makes `fig1.pdf`) are built before the manuscript's
+LaTeX (build, export, diff), when they changed: their .tex, or a file they
+read (the panels R made: in their .fls), is newer than their PDF. They are
+found by themselves: each `\includegraphics{X}` (in an .Rmd, also `![](X)`
+and `knitr::include_graphics("X")`) whose PDF has a .tex beside it. Their
+engine: their `% !TeX program = xelatex` line; else the one that built them
+last (a figure made by hand, or by a Makefile, stays as it was made); else
+pdfLaTeX, or LuaLaTeX if they load fontspec. Their LaTeX errors go to the
+quickfix list (and the figure is built again next time); :Manuscript clean
+removes their auxiliary files too. The option `figures`: >lua
+
+  figures = true,                          -- (the default) as above
+  figures = false,                         -- never
+  figures = { "../figures/2_final/*.tex" } -- also these (globs, relative to
+                                           -- the manuscript's folder)
+<
+:Manuscript build in a figure's .tex builds just it: it is a manuscript of
+one file.
 
 ==============================================================================
 EXPORT                                                     *manuscript-export*
@@ -152,6 +214,11 @@ already (<CR>, |:cnext|...), so the diff stays as it is; those about
 paragraphs only the document has (the title page...) come last, and open the
 document in its tab. (While a merge tab is open, 'switchbuf' is
 "useopen,usetab,newtab"; yours again when it is closed.)
+
+The edits are written in the source's own language: LaTeX in a .tex or .Rnw
+(`\emph{}`, `\parencite{key}`), Markdown in an .Rmd (`*...*`, `**...**`,
+`[@key]`), with raw LaTeX in it left as it is. Every file of the manuscript
+is a source: a paragraph in an `\input{}` file is edited there.
 
 Running it again is safe, and it reads your sources as they are in Nvim,
 with what you took and haven't written yet: what your source has already is
@@ -209,15 +276,18 @@ around the edits stay as they are.
 ==============================================================================
 DIFF                                                         *manuscript-diff*
 
-:Manuscript diff [{part}] [{old}] [{new}] [{oldkey}={newkey} ...] makes a PDF with the
-changes between two versions of the manuscript, marked as tracked changes
-(latexdiff), in `diff/<old>-vs-<new>.pdf`, and opens it (the first time:
-then your PDF viewer reloads it). Its LaTeX files are kept in Nvim's cache, so
-making the same diff again runs LaTeX only as much as needed. A version is:
+:Manuscript diff [{part}] [{variant}] [{old}] [{new}] [{oldkey}={newkey} ...]
+makes a PDF with the changes between two versions of the manuscript, marked
+as tracked changes (latexdiff), in `diff/<old>-vs-<new>.pdf`, and opens it
+(the first time: then your PDF viewer reloads it). Its LaTeX files are kept
+in .build/diff/, so making the same diff again runs LaTeX only as much as
+needed. With a variant, it is built with its switches (an anonymous diff for
+a double-blind resubmission). A version is:
 
-  (none), @              the last export: what you sent
-  @2, @2026-10-23        an export, by its place (@1 is the last; see
-                         :Manuscript versions) or its folder's name
+  (none), @              the last export or submission: what you sent
+  @2, @2026-10-23, @geb  an export or a submission, by its place (@1 is the
+                         last; see :Manuscript versions) or its folder's
+                         name (@geb: the last submission to geb)
   HEAD, c2ffc81, v1      a git revision: the manuscript's files as they were
                          then, knitted with today's data and code
   path                   a .tex file (as it is), or an .Rnw/.tex root or its
@@ -233,29 +303,177 @@ build: without a build of the whole yet, one is made first, for the numbers
 of its references to the others). A git branch with a part's name is
 `heads/<name>` here.
 
-<Tab> completes the parts, exports, tags, branches and recent commits. A citation
-key renamed since (the same DOI, or title and year, in the old and new .bib)
-is renamed in the old version, so that it doesn't show as a change;
-`oldkey=newkey` arguments add to them. The PDF is built with lua-ul when it
+<Tab> completes the parts, variants, exports, submissions, tags, branches
+and recent commits. A citation key renamed since (the same DOI, or title
+and year, in the old and new .bib) is renamed in the old version, so that it
+doesn't show as a change; `oldkey=newkey` arguments add to them. The PDF is built with lua-ul when it
 is installed (ulem stops hyphenation), and some room to stretch lines.
+
+==============================================================================
+VARIANTS                                                 *manuscript-variants*
+
+A variant is a version of the same sources: a name for LaTeX switches that
+its builds turn on. Every build defines every switch (`\ifanonymous`,
+`\iflinenumbers`...), off but for its variant's, and `\manuscriptvariant`
+(its name), before your sources are read; your preamble uses them:
+>latex
+  \ifanonymous\else
+    \author{Ana Author} \affil{University}
+  \fi
+  \iflinenumbers\usepackage{lineno}\linenumbers\fi
+<
+Built otherwise (by hand), the switches are undefined: a guard in the
+preamble defines them, off (the templates have it, see |manuscript-new|):
+>latex
+  \ifcsname ifanonymous\endcsname\else\expandafter\newif\csname ifanonymous\endcsname\fi
+<
+(Not `\ifdefined\ifanonymous`: TeX would count a skipped `\ifanonymous` as
+a conditional, and its `\fi` would close the wrong one.)
+
+The variants are:
+
+  anon         anonymous = true; the PDF has no author nor file paths in its
+               metadata either
+  review       linenumbers = true, doublespacing = true
+  draft        draftversion = true, linenumbers = true
+
+and a manuscript's own, in its .manuscript.lua (they may redefine these):
+>lua
+  return {
+    variants = {
+      geb = { anonymous = true, linenumbers = true, doublespacing = true,
+              submit = { appendix_name = "Appendix_S%d" } },
+    },
+  }
+<
+A switch is a word of letters; the switches the templates use are
+anonymous, draftversion, linenumbers, doublespacing and figuresatend.
+`:Manuscript build geb` makes <part>-geb.pdf; |:Manuscript| diff and submit
+take a variant too.
+
+==============================================================================
+SUBMIT                                                     *manuscript-submit*
+
+:Manuscript submit [{variant}] [anonymous|named] makes what a journal asks
+for, in a new folder submission/<variant>-<date>/:
+
+  manuscript.pdf          the main text (the part "main", or the first),
+                          built with the variant's switches
+  Appendix_S1.pdf, ...    each other part, its own PDF
+  title_page.pdf, ...     title_page.tex, cover_letter.tex and response.tex
+                          beside the root, if there, built (named: they
+                          have the authors)
+  latex/                  what compiles manuscript.pdf, and nothing else:
+    manuscript.tex          knitted, its `\input{}`s inlined, its comments
+                            out, the switches resolved in the text: an
+                            anonymous source has no authors at all, not even
+                            in a branch TeX would skip
+    figures/                the pictures it reads (those a macro makes too:
+                            `\includegraphics{panels/p_#1}`), paths rewritten
+    references.bib          only the entries it cites (and their crossref),
+                            from all its .bib files; and manuscript.bbl
+    *.sty, *.cls            the local packages and classes it reads (yours
+                            in TEXMFHOME too: a journal doesn't have them)
+  <folder>-latex.zip      latex/, to upload
+
+Before it is kept, latex/ is compiled on its own, in another folder and
+without your TEXMFHOME: if it doesn't build there, the submission fails
+here, not at the journal. `anonymous` or `named` force the variant's
+anonymity (`:Manuscript submit geb named`, once accepted).
+
+An anonymous submission is searched for who wrote it: the names and emails
+of the author block of the named version (`\author`, `\affil`, `\thanks`...;
+an .Rmd's YAML authors), git's user, and the option `identity`. Where they
+are (in the source, in a PDF's text or metadata; a file path of your
+computer in a PDF) goes to the |quickfix| list; those in the bibliography,
+self-citations, after the others, as such (they are no leak). A citation
+key, though it names an author, isn't searched.
+
+A variant's `submit` table changes how: >lua
+
+  submit = {
+    appendices = "separate",       -- or "inline": one document
+    appendix_name = "Appendix_S%d",
+    figures = "names",             -- or "numbered": fig1.pdf, fig2.png...
+    comments = false,              -- true: they stay in the source
+    extras = { "title_page", "cover_letter", "response" },
+  }
+<
+A submission is recorded as an export is (the LaTeX it was made from, the
+commit): `:Manuscript diff @geb` makes the tracked changes since it. A
+resubmission (another one with the same variant) has them in it too:
+changes_since_<the last one>.pdf, built with the variant's switches
+(anonymous, for a double-blind journal). `changes = false` in the variant's
+`submit` table: not.
+
+==============================================================================
+RESPOND                                                   *manuscript-respond*
+
+:Manuscript respond opens response.tex beside the root, or, the first time,
+a buffer for the reviewers' comments: paste them as the journal sent them
+(the whole decision letter will do), and |:w| writes response.tex, with a
+point for each comment, quoted, and room for your answer after it. A
+reviewer starts at a line that names one ("Reviewer #2:", "Comments of
+Referee 1", "Associate Editor"); a point at a line numbered as reviewers do
+(1., 2), (3), Comment 4, R1.5, a bullet), or, when none is, at each
+paragraph. In it, `\changed{label}` says where a change is: its page in the
+revised manuscript (from its last build of the whole, .build/<root>/; xr).
+|:Manuscript| submit builds it into response.pdf.
+
+==============================================================================
+ARCHIVE                                                   *manuscript-archive*
+
+:Manuscript archive puts the code and data of the manuscript's repository in
+one zip, for Zenodo or Dryad: submission/<repository>-<date>.zip. Its files
+are those git tracks, as they are now (it says so when some changed since
+the last commit), with those of `archive.include` (results kept out of git)
+and without those of `archive.exclude`: globs relative to the repository,
+in .manuscript.lua: >lua
+
+  return { archive = { include = { "results/*.rds" }, exclude = { "raw_data/iucn" } } }
+<
+
+==============================================================================
+NEW                                                           *manuscript-new*
+
+:Manuscript new [{template}] [{folder}] makes a new manuscript in {folder}
+(new or empty; `manuscript` by default) from a template, and opens its
+root. The plugin's templates, one per kind (rnw, rmd, tex, jnw), are a paper
+of a main text and an appendix (its own title block, references and
+numbering), with the switches of |manuscript-variants| in the preamble
+(the authors in 01_authors.tex, in `\ifanonymous\else ... \fi`; line numbers,
+double spacing, figures at the end), a title page and a cover letter for
+|manuscript-submit|, an empty references.bib and a .manuscript.lua for its
+variants. Your own: the folders of the option `templates` (they win by
+name). <Tab> completes them.
 
 ==============================================================================
 COMMANDS                                                         *:Manuscript*
 
-:Manuscript build [{part}|all|watch] [{name}.pdf]
+:Manuscript new [{template}] [{folder}]
+                                A new manuscript (|manuscript-new|).
+:Manuscript build [{part}|all|watch] [{variant}] [{name}.pdf]
                                 The PDF of the current part, a part, or the
-                                whole; watch: on each write (|manuscript-build|).
-:Manuscript clean [{part}]      The auxiliary files of the builds (all, or
-                                a part's).
+                                whole; watch: on each write
+                                (|manuscript-build|).
+:Manuscript clean [{part}|{name}]
+                                What the builds left (all, or a build's).
 :Manuscript export              Word files of the manuscript in export/<date>/
                                 (|manuscript-export|).
 :Manuscript merge [{manuscript}] [{export}]
                                 In a document: its edits into the sources, in
                                 a diff view (|manuscript-merge|).
-:Manuscript diff [{part}] [{old}] [{new}] [{oldkey}={newkey} ...]
+:Manuscript diff [{part}] [{variant}] [{old}] [{new}] [{oldkey}={newkey} ...]
                                 A PDF with the changes between two versions,
                                 of the whole or of a part (|manuscript-diff|).
-:Manuscript versions            The exports, for :Manuscript diff @N.
+:Manuscript submit [{variant}] [anonymous|named]
+                                The files for a journal (|manuscript-submit|).
+:Manuscript respond             The response to the reviewers
+                                (|manuscript-respond|).
+:Manuscript archive             The repository's code and data, zipped
+                                (|manuscript-archive|).
+:Manuscript versions            The exports and submissions, for
+                                :Manuscript diff @N.
 
 Alone, it lets you pick one.
 
@@ -269,6 +487,8 @@ manuscript.nvim sets no keymaps. For example: >lua
   vim.keymap.set("n", "<leader>rc", "<Cmd>Manuscript clean<CR>", { desc = "Clean the build" })
   vim.keymap.set("n", "<leader>me", "<Cmd>Manuscript export<CR>", { desc = "Export to Word" })
   vim.keymap.set("n", "<leader>md", "<Cmd>Manuscript diff<CR>", { desc = "Changes since the last export" })
+  -- or on the command line, for a variant, a part, a version (<Tab> completes them)
+  vim.keymap.set("n", "<leader>rs", ":Manuscript submit ", { desc = "Submit (a variant)" })
   -- in documents (neoffice's filetype), next to its <leader>w keymaps
   vim.api.nvim_create_autocmd("FileType", {
     pattern = "neoffice",
@@ -290,12 +510,22 @@ No setup() is needed. These are the defaults: >lua
     move_figures = false,    -- figures at the end of each Word file
     move_tables = false,     -- tables at the end
     dpi = 200,               -- PDF figures become PNG at this resolution
-    knit = nil,              -- "knitrmini" or "knitr"; nil: knitrmini if
-                             -- installed
+    knit = nil,              -- "knitrmini", "knitr", "rmarkdown" (an .Rmd)
+                             -- or "knit.jl" (a .jnw); nil: see
+                             -- |manuscript-knit|
+    julia = { "julia" },     -- the Julia worker's command (.jnw files)
     latex = "lualatex",      -- the LaTeX engine for PDFs: "lualatex",
                              -- "pdflatex" or "xelatex"
     build_on_save = false,   -- :Manuscript build on each write
+    figures = true,          -- build its standalone figures when they
+                             -- changed (|manuscript-figures|)
     latexdiff = { "--math-markup=whole" }, -- latexdiff's options
+    templates = nil,         -- a folder of your templates (:Manuscript new)
+    identity = nil,          -- more words an anonymous submission must not
+                             -- have (who you are)
+    variants = {},           -- your variants (|manuscript-variants|)
+    archive = nil,           -- { include = {...}, exclude = {...} }
+                             -- (|manuscript-archive|)
   })
 <
 A manuscript can have its own: a `.manuscript.lua` in its folder that returns

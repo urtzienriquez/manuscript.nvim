@@ -1,0 +1,19 @@
+% !TeX root = 1_index.Rnw
+\maketitle
+
+\begin{abstract}
+\end{abstract}
+
+\section{Introduction}
+
+\section{Methods}
+
+\section{Results}
+
+\section{Discussion}
+
+\ifanonymous\else
+\section*{Acknowledgements}
+\fi
+
+\printbibliography[heading=bibnumbered, title={References}]

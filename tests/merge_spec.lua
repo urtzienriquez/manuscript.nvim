@@ -194,6 +194,23 @@ describe(":Manuscript merge", function()
     assert.truthy(has(issues, "new paragraph"))
   end)
 
+  it("edits a paragraph in a file the root \\input{}s", function()
+    local path = setup()
+    local dir = vim.fs.dirname(path)
+    local intro = SOURCE:match("\\section{Introduction}.*$")
+    vim.fn.writefile(vim.split(SOURCE:gsub("\\section{Introduction}.*$", "\\input{intro}\n\\end{document}\n"), "\n"), path)
+    vim.fn.writefile(vim.split(intro, "\n"), dir .. "/intro.tex")
+    H.replace(2, "north", "south")
+    merge.run({ path })
+    local texts = {}
+    for _, w in ipairs(api.nvim_tabpage_list_wins(0)) do
+      texts[api.nvim_buf_get_name(api.nvim_win_get_buf(w))] = table.concat(api.nvim_buf_get_lines(api.nvim_win_get_buf(w), 0, -1, false), "\n")
+    end
+    assert.truthy(texts[dir .. "/intro.tex"], vim.inspect(vim.tbl_keys(texts)))
+    assert.truthy(vim.iter(texts):any(function(_, t) return t:find("in the south of Iberia", 1, true) ~= nil end))
+    vim.cmd("tabonly!")
+  end)
+
   describe("with the copy as sent", function()
     it("finds edits made without tracking", function()
       local path = setup(nil, nil, true)

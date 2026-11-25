@@ -27,11 +27,18 @@ jobs:
           version: ${{ matrix.neovim }}
 
       # pandoc for the exports; latexdiff and a small TeX for the builds and the tracked-changes PDF
-      # (texlive-science: siunitx, in the test document; the tests that need R are skipped without it)
+      # (texlive-science: siunitx, in the test document; biber, biblatex and zip: the submissions)
       - name: Install pandoc, latexdiff and TeX
         run: |
           sudo apt-get update
-          sudo apt-get install -y pandoc latexdiff latexmk texlive-latex-recommended texlive-latex-extra texlive-science poppler-utils
+          sudo apt-get install -y pandoc latexdiff latexmk texlive-latex-recommended texlive-latex-extra texlive-science poppler-utils biber texlive-bibtex-extra zip unzip
+
+      # R, for the .Rnw and .Rmd tests: knitr and rmarkdown from Ubuntu, knitrmini from GitHub
+      - name: Install R, rmarkdown and knitrmini
+        run: |
+          sudo apt-get install -y r-base-core r-cran-knitr r-cran-rmarkdown r-cran-remotes
+          sudo Rscript -e 'remotes::install_github("urtzienriquez/knitrmini", upgrade = "never")'
+          Rscript -e 'library(knitrmini); library(rmarkdown)'
 
       - name: Install plenary.nvim and neoffice.nvim
         run: |

@@ -36,6 +36,61 @@ function M.read(paths)
   return out
 end
 
+-- The keys a build cites, from its .bbl: biblatex's \entry{key}, BibTeX's \bibitem{key}, in order.
+function M.cited(bbl)
+  local keys, seen = {}, {}
+  local function add(key)
+    if not seen[key] then
+      seen[key], keys[#keys + 1] = true, key
+    end
+  end
+  for key in bbl:gmatch("\\entry{([^}]+)}") do
+    add(key)
+  end
+  for key in bbl:gmatch("\\bibitem%s*%b[]%s*{([^}]+)}") do
+    add(key)
+  end
+  for key in bbl:gmatch("\\bibitem%s*{([^}]+)}") do
+    add(key)
+  end
+  return keys
+end
+
+-- A .bib file with only the entries of `keys` (and those they name in crossref, xdata or set),
+-- as they are written in `paths` (the first file that has one wins), and every @string.
+function M.subset(paths, keys)
+  local raw, strings = {}, {}
+  for _, path in ipairs(paths) do
+    local f = io.open(path)
+    local text = f and f:read("*a") or ""
+    if f then
+      f:close()
+    end
+    for kind, entry in text:gmatch("@(%a+)%s*(%b{})") do
+      local key = entry:match("^{%s*([^,%s]+)%s*,")
+      if kind:lower() == "string" then
+        strings[#strings + 1] = "@" .. kind .. entry
+      elseif key and not ({ comment = true, preamble = true })[kind:lower()] and not raw[key] then
+        raw[key] = "@" .. kind .. entry
+      end
+    end
+  end
+  local out, seen, queue = {}, {}, vim.deepcopy(keys)
+  while #queue > 0 do
+    local key = table.remove(queue, 1)
+    if raw[key] and not seen[key] then
+      seen[key], out[#out + 1] = true, raw[key]
+      local fields = (M.parse(raw[key])[key] or {}).fields or {}
+      for _, name in ipairs({ "crossref", "xdata", "set" }) do
+        for other in (fields[name] or ""):gmatch("[^,%s]+") do
+          queue[#queue + 1] = other
+        end
+      end
+    end
+  end
+  return table.concat(vim.list_extend(strings, out), "\n\n") .. (#out > 0 and "\n" or "")
+end
+
 -- Keys renamed from `old` to `new` (entries read by M.parse): the same DOI, or else the same title
 -- and year, under another key. { [old key] = new key }
 function M.renames(old, new)

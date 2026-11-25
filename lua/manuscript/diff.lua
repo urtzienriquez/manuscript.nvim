@@ -25,20 +25,6 @@ local function write(path, text)
   f:close()
 end
 
--- Moves the files whose names start with `prefix` from one folder to another.
-local function move(from, to, prefix)
-  vim.fn.mkdir(to, "p")
-  for file in vim.fs.dir(from) do
-    if vim.startswith(file, prefix) then
-      local a, b = vim.fs.joinpath(from, file), vim.fs.joinpath(to, file)
-      if not os.rename(a, b) then -- (another file system)
-        vim.uv.fs_copyfile(a, b)
-        os.remove(a)
-      end
-    end
-  end
-end
-
 local opened = {} -- (the PDFs opened: once, as the viewer reloads them)
 
 local function git(project, args)
@@ -62,8 +48,9 @@ function M.version(project, spec, cache, as, part)
   if n or spec:match("^@.") then -- an export
     local list = snapshot.list(project)
     local found = n and list[tonumber(n ~= "" and n or "1")]
-    if not n then
-      found = vim.iter(list):find(function(s) return vim.startswith(s.name, spec:sub(2)) end)
+    if not n then -- (its name; else the last whose name starts so: @geb)
+      found = vim.iter(list):find(function(s) return s.name == spec:sub(2) end)
+        or vim.iter(list):find(function(s) return vim.startswith(s.name, spec:sub(2)) end)
     end
     if not found then
       job.fail(#list == 0 and "no export yet (:Manuscript export): give a version to compare with, as HEAD or a commit"
@@ -98,8 +85,10 @@ function M.version(project, spec, cache, as, part)
     end
     return { label = vim.fs.basename(other.dir), tex = same and knit.one(other, same.file, out) or knit.whole(other, out), bibs = text }
   end
-  -- a git revision: the root, its parts and .bib files as they were, beside the root (as
-  -- _manuscript-old-*), knitted there with today's data and code, as make_diff.sh did
+  -- a git revision: the manuscript's files as they were (the root, and what it included then:
+  -- child chunks, \input, \include, recursively), beside the root (as _manuscript-old-*, their
+  -- references to each other rewritten), knitted there with today's data and code, as
+  -- make_diff.sh did
   if not project.git then
     job.fail(spec .. " is neither an export, a file nor a folder (and the manuscript isn't in git)")
   end
@@ -108,25 +97,50 @@ function M.version(project, spec, cache, as, part)
     job.fail(spec .. " isn't an export, a file, a folder or a git revision")
   end
   commit = vim.trim(commit)
-  local function old(file) -- (the file's text at the revision, or nil)
-    return git(project, { "show", commit .. ":./" .. file:sub(#project.dir + 2) })
+  local function old(rel) -- (a file's text at the revision, or nil; rel: in the root's folder)
+    return git(project, { "show", commit .. ":./" .. rel })
   end
-  local root = old(project.root) or job.fail(vim.fs.basename(project.root) .. " didn't exist at " .. spec)
-  local copies = {}
-  for _, p in ipairs(project.parts) do
-    if p.file ~= project.root then
-      local name = vim.fs.basename(p.file)
-      local text = old(p.file)
-      if text then
-        copies[#copies + 1] = "_manuscript-old-" .. name
-        write(vim.fs.joinpath(project.dir, copies[#copies]), text)
-        root = root:gsub("child%s*=%s*(['\"])" .. vim.pesc(name) .. "%1", "child=%1_manuscript-old-" .. name .. "%1")
-          :gsub("\\input{" .. vim.pesc(name) .. "}", "\\input{_manuscript-old-" .. name .. "}")
+  local root_rel = vim.fs.basename(project.root)
+  local texts = { [root_rel] = old(root_rel) or job.fail(root_rel .. " didn't exist at " .. spec) }
+  local copies = {} -- [rel] = its copy's name
+  local function rel_of(name, how) -- (the file an inclusion names, in the root's folder; or nil)
+    local path = vim.fs.normalize(vim.fs.joinpath(project.dir, name))
+    if how ~= "child" and not path:match("%.%w+$") then
+      path = path .. ".tex"
+    end
+    return vim.startswith(path, project.dir .. "/") and path:sub(#project.dir + 2) or nil
+  end
+  local queue = { root_rel }
+  while #queue > 0 do
+    local rel = table.remove(queue, 1)
+    for _, inc in ipairs(project_.includes(texts[rel], project_.kind(rel) or "tex")) do
+      local file = rel_of(inc.name, inc.how)
+      if file and not texts[file] and project_.kind(file) then
+        local text = old(file)
+        if text then
+          texts[file], copies[file] = text, "_manuscript-old-" .. file:gsub("/", "__")
+          queue[#queue + 1] = file
+        end
       end
     end
   end
-  local old_part = part and vim.fs.joinpath(project.dir, "_manuscript-old-" .. vim.fs.basename(part.file))
-  if part and not vim.tbl_contains(copies, vim.fs.basename(old_part)) then
+  local function rewrite(text) -- (references to files copied: to their copies)
+    text = text:gsub("(child%s*=%s*)(['\"])([^'\"]+)%2", function(pre, q, name)
+      local copy = copies[rel_of(name, "child") or ""]
+      return copy and (pre .. q .. copy .. q) or nil
+    end)
+    return (text:gsub("\\(%a+)(%s*){([^}]+)}", function(how, space, name)
+      local copy = (how == "input" or how == "include") and copies[rel_of(vim.trim(name), how) or ""]
+      return copy and ("\\" .. how .. space .. "{" .. (how == "include" and copy:gsub("%.tex$", "") or copy) .. "}") or nil
+    end))
+  end
+  for rel, copy in pairs(copies) do
+    write(vim.fs.joinpath(project.dir, copy), rewrite(texts[rel]))
+  end
+  local root = rewrite(texts[root_rel])
+  local old_part = part and (part.file == project.root and project.root
+    or copies[part.file:sub(#project.dir + 2)] and vim.fs.joinpath(project.dir, copies[part.file:sub(#project.dir + 2)]))
+  if part and not old_part then
     knit.clean(project.dir)
     job.fail(("%s didn't exist at %s"):format(vim.fs.basename(part.file), spec))
   end
@@ -142,7 +156,7 @@ function M.version(project, spec, cache, as, part)
   end
   local bibs = ""
   for _, path in ipairs(project.bibs) do
-    bibs = bibs .. (old(path) or "") .. "\n"
+    bibs = bibs .. (vim.startswith(path, project.dir .. "/") and old(path:sub(#project.dir + 2)) or "") .. "\n"
   end
   local label = vim.trim(git(project, { "rev-parse", "--short", commit }) or spec)
   return { label = spec:match("^[%w._-]+$") and spec ~= label and (spec .. "-" .. label) or label, tex = tex, bibs = bibs }
@@ -187,7 +201,8 @@ function M.run(args, on_done)
     local project = project_.find()
     job.need("latexdiff", "for the tracked-changes PDF")
     job.need("latexmk", "for the tracked-changes PDF")
-    local renames, specs, part = {}, {}, nil
+    local renames, specs, part, variant = {}, {}, nil, nil
+    local variants = require("manuscript.variants").all(project)
     for _, arg in ipairs(args) do
       local from, to = arg:match("^([^=]+)=(.+)$")
       local named = #project.parts > 1 and vim.iter(project.parts):find(function(p) return p.name == arg end)
@@ -195,16 +210,21 @@ function M.run(args, on_done)
         renames[from] = to
       elseif named then -- (a part: only it; a git branch of that name is heads/<name>)
         part = named
+      elseif variants[arg] then -- (a variant: its switches; a git branch of that name is heads/<name>)
+        variant = arg
       else
         specs[#specs + 1] = arg
       end
     end
     job.title(part and "diff " .. part.name or "diff")
+    require("manuscript.figures").update(project)
     local cache = require("manuscript.export").cache(project, "diff")
-    local labels = vim.fs.joinpath(project.dir, vim.fs.basename(project.root):gsub("%.[^.]+$", "") .. "-labels.aux")
-    if part and project.rnw and not vim.uv.fs_stat(labels) then -- (as a build: the numbers of its references)
-      local whole = vim.fs.basename(project.root):gsub("%.[^.]+$", "")
-      require("manuscript.build").make(project, whole, nil, "the whole first (for the numbers of references)")
+    if part and not require("manuscript.build").has_labels(project) then -- (as a build: the numbers of its references)
+      local ok, err = pcall(require("manuscript.build").make, project, { label = "the whole first (for the numbers of references)" })
+      knit.clean(project.dir)
+      if not ok then
+        error(err, 0)
+      end
     end
     job.say("(1/4) preparing the old version: " .. (specs[1] or "the last export"), 0)
     local old = M.version(project, specs[1], cache, "old", part)
@@ -212,8 +232,9 @@ function M.run(args, on_done)
     local new = M.version(project, specs[2] or ".", cache, "new", part)
     renames = vim.tbl_extend("keep", renames, bib.renames(bib.parse(old.bibs), bib.parse(new.bibs)))
     local a, b = vim.fs.joinpath(cache, "a.tex"), vim.fs.joinpath(cache, "b.tex")
-    write(a, M.citations(read(old.tex), renames))
-    write(b, M.citations(read(new.tex), {}))
+    -- (flattened: an export made before they were kept so may \input{} files)
+    write(a, M.citations(project_.flatten(read(old.tex), project.dir), renames))
+    write(b, M.citations(project_.flatten(read(new.tex), project.dir), {}))
     job.say(("(3/4) comparing %s and %s"):format(old.label, new.label), 50)
     local r = job.run(vim.list_extend(vim.list_extend({ "latexdiff" }, project.options.latexdiff), { "a.tex", "b.tex" }), { cwd = cache })
     if r.code ~= 0 then
@@ -226,39 +247,44 @@ function M.run(args, on_done)
         :gsub("(\\RequirePackage%[normalem%]{ulem}[^\n]*)", "%1\n\\RequirePackage{lua-ul}", 1)
     end
     diff = diff:gsub("(\n\\begin{document}[^\n]*\n)", "%1\\setlength{\\emergencystretch}{3em}\n", 1)
-    local name = "_manuscript-diff" -- (built where the root is: its pictures and .bib are found)
     local folder = vim.fs.joinpath(project.dir, "diff")
     vim.fn.mkdir(folder, "p")
     if not vim.uv.fs_stat(vim.fs.joinpath(folder, ".gitignore")) then
       write(vim.fs.joinpath(folder, ".gitignore"), "*\n")
     end
-    local title = ((part and part.name .. "-" or "") .. old.label .. "-vs-" .. new.label):gsub("[^%w._-]", "_")
+    local title = ((part and part.name .. "-" or "") .. old.label .. "-vs-" .. new.label .. (variant and "-" .. variant or ""))
+      :gsub("[^%w._-]", "_")
     local out = vim.fs.joinpath(folder, title .. ".pdf")
-    -- (the LaTeX files of this diff's last PDF, kept in the cache: latexmk reruns only what changed)
-    local kept = vim.fs.joinpath(cache, "latex", title)
-    move(kept, project.dir, name .. ".")
-    local pdf = vim.fs.joinpath(project.dir, name .. ".pdf")
-    local log = vim.fs.joinpath(project.dir, name .. ".log")
+    -- (built in .build/diff/, run where the root is: its pictures and .bib are found; its LaTeX
+    -- files kept, so that latexmk reruns only what changed)
+    local built_in = require("manuscript.build").dir(project, "diff")
+    local tex = vim.fs.joinpath(built_in, title .. ".tex")
+    local pdf = vim.fs.joinpath(built_in, title .. ".pdf")
+    local log = vim.fs.joinpath(built_in, title .. ".log")
     local function changed(file, stat) -- (since `stat`, of before latexmk)
       local now = vim.uv.fs_stat(file)
       return now and (not stat or now.mtime.sec ~= stat.mtime.sec or now.mtime.nsec ~= stat.mtime.nsec)
     end
     local before, log_before = vim.uv.fs_stat(pdf), vim.uv.fs_stat(log) -- (the last one's)
-    if project_.read(vim.fs.joinpath(project.dir, name .. ".tex")) ~= diff then -- (as kept, if the same)
-      write(vim.fs.joinpath(project.dir, name .. ".tex"), diff)
+    if project_.read(tex) ~= diff then -- (as kept, if the same)
+      write(tex, diff)
     end
-    write(vim.fs.joinpath(cache, "diff.tex"), diff) -- (a copy, to look at if the PDF fails)
     job.say("(4/4) building the PDF", 75)
-    local built = job.run({ "latexmk", require("manuscript").latexmk_flag(project.options.latex), "-interaction=nonstopmode", name .. ".tex" }, { cwd = project.dir })
+    local built = job.run({ "latexmk", require("manuscript").latexmk_flag(project.options.latex), "-interaction=nonstopmode",
+      "-outdir=.build/diff", "-jobname=" .. title, "-usepretex=" .. require("manuscript.variants").pretex(project, variant),
+      ".build/diff/" .. title .. ".tex" }, { cwd = project.dir })
     -- (made: without errors; or a new PDF anyway, with LaTeX errors that didn't stop it; or no LaTeX
     -- run, the last PDF being this one, with the errors it had then)
     local made = vim.uv.fs_stat(pdf) and (built.code == 0 or changed(pdf, before) or log_before and not changed(log, log_before))
     if not made or not vim.uv.fs_copyfile(pdf, out) then
       log = project_.read(log) or ""
-      knit.clean(project.dir) -- (and what was kept: from scratch next time)
+      for file in vim.fs.dir(built_in) do -- (from scratch next time)
+        if file:sub(1, #title + 1) == title .. "." then
+          os.remove(vim.fs.joinpath(built_in, file))
+        end
+      end
       job.fail("latexmk couldn't build the PDF:\n" .. (log:match("\n(! .-)\n\n") or job.tail(built)))
     end
-    move(project.dir, kept, name .. ".")
     knit.clean(project.dir)
     job.say(vim.fn.fnamemodify(out, ":~:.") .. " ready")
     if not opened[out] then

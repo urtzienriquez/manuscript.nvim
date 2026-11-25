@@ -1,6 +1,6 @@
--- What was exported: each export/<date>/ keeps, in .manuscript/, the LaTeX its Word files were
--- made from (one per part, and all.tex: the whole) and manifest.json: { date, root, parts, files
--- (each part's Word file), commit, dirty }. With uncommitted changes (dirty), also a copy of the sources (.manuscript/sources/), as
+-- What was sent: each export/<date>/ (and each submission/<variant>-<date>/) keeps, in .manuscript/,
+-- the LaTeX it was made from (one per part, and all.tex: the whole) and manifest.json: { date, root,
+-- parts, files (each part's Word file), commit, dirty, kind ("submission"), variant }. With uncommitted changes (dirty), also a copy of the sources (.manuscript/sources/), as
 -- the commit alone wouldn't give them back.
 local job = require("manuscript.job")
 local M = {}
@@ -13,7 +13,7 @@ local function git(project, args)
   return r.code == 0 and vim.trim(r.stdout) or nil
 end
 
-function M.record(project, folder, texs, files)
+function M.record(project, folder, texs, files, extra)
   local meta = vim.fs.joinpath(folder, ".manuscript")
   vim.fn.mkdir(meta, "p")
   for name, path in pairs(texs) do
@@ -26,6 +26,9 @@ function M.record(project, folder, texs, files)
     files = files,
     commit = git(project, { "rev-parse", "HEAD" }),
   }
+  for key, value in pairs(extra or {}) do
+    manifest[key] = value
+  end
   local status = git(project, { "status", "--porcelain", "--", "." })
   manifest.dirty = not manifest.commit or (status ~= nil and status ~= "")
   if manifest.dirty then -- (the sources as they were)
@@ -53,20 +56,23 @@ function M.docx(s, part)
   return vim.fs.joinpath(s.dir, (s.manifest.files or {})[part] or part .. ".docx")
 end
 
--- The exports of a project, the last first: { name (the folder's: "2026-11-25"), dir, manifest }.
+-- The exports and submissions of a project, the last first: { name (the folder's: "2026-11-25",
+-- "geb-2026-11-25"), dir, manifest }.
 function M.list(project)
-  local base = vim.fs.joinpath(project.dir, project.options.export_dir)
   local out = {}
-  for name, kind in vim.fs.dir(base) do
-    local file = vim.fs.joinpath(base, name, ".manuscript", "manifest.json")
-    if kind == "directory" and vim.uv.fs_stat(file) then
-      local f = io.open(file)
-      local ok, manifest = pcall(vim.json.decode, f and f:read("*a") or "")
-      if f then
-        f:close()
-      end
-      if ok and type(manifest) == "table" then
-        out[#out + 1] = { name = name, dir = vim.fs.joinpath(base, name), manifest = manifest }
+  for _, folder in ipairs({ project.options.export_dir, "submission" }) do
+    local base = vim.fs.joinpath(project.dir, folder)
+    for name, kind in vim.fs.dir(base) do
+      local file = vim.fs.joinpath(base, name, ".manuscript", "manifest.json")
+      if kind == "directory" and vim.uv.fs_stat(file) then
+        local f = io.open(file)
+        local ok, manifest = pcall(vim.json.decode, f and f:read("*a") or "")
+        if f then
+          f:close()
+        end
+        if ok and type(manifest) == "table" then
+          out[#out + 1] = { name = name, dir = vim.fs.joinpath(base, name), manifest = manifest }
+        end
       end
     end
   end

@@ -1,0 +1,22 @@
+\input{00_preamble}
+
+% (for the editor: the parts as LaTeX, never compiled)
+\newif\iftexlab
+\iftexlab
+  \input{2_main.jnw}
+  \input{3_appendix1.jnw}
+\fi
+
+\begin{document}
+
+<<setup, include=false>>=
+set_chunk_default(:echo, false)
+@
+
+<<child='2_main.jnw'>>=
+@
+
+<<child='3_appendix1.jnw'>>=
+@
+
+\end{document}

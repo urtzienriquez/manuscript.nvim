@@ -12,10 +12,22 @@ M.config = {
   move_figures = false, -- figures to the end of each Word file
   move_tables = false, -- tables to the end
   dpi = 200, -- PDF figures become PNG images at this resolution
-  knit = nil, -- how .Rnw files are knitted: "knitrmini", "knitr", or nil = knitrmini if installed
+  knit = nil, -- how it is knitted: "knitrmini", "knitr", "rmarkdown" (an .Rmd), "knit.jl" (a .jnw); nil:
+  -- a .jnw with Knit.jl; an .Rmd with rmarkdown if its YAML header names an output format, else
+  -- knitrmini; an .Rnw with knitrmini if installed, else knitr
+  julia = { "julia" }, -- the command of the Julia worker that knits .jnw files (Knit.jl must be installed)
+  r_worker = true, -- knitrmini in an R kept running (R and the packages a document loads, started
+  -- once); false: a new R for each knit
   latex = "lualatex", -- the LaTeX engine for PDFs (builds, diffs): "lualatex", "pdflatex", "xelatex"
   build_on_save = false, -- :Manuscript build when a file of a manuscript is written
+  figures = true, -- build the standalone LaTeX figures it includes (fig1.tex -> fig1.pdf) when they
+  -- changed; false: never; or a list of globs of more (relative to the manuscript's folder)
   latexdiff = { "--math-markup=whole" }, -- latexdiff's options
+  templates = nil, -- a folder of your templates for :Manuscript new (each a folder; they win over
+  -- the plugin's by name), e.g. "~/Templates"
+  identity = nil, -- more words :Manuscript submit looks for in an anonymous submission (who you are)
+  variants = {}, -- your variants (see variants.lua): { name = { switch = true, ..., submit = {...} } }
+  archive = nil, -- :Manuscript archive: { include = { globs }, exclude = { globs } } (relative to the repository)
 }
 
 function M.setup(opts)

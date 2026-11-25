@@ -1,0 +1,32 @@
+\input{00_preamble}
+
+% (for the editor: the parts as LaTeX, never compiled)
+\newif\iftexlab
+\iftexlab
+  \input{2_main.Rnw}
+  \input{3_appendix1.Rnw}
+\fi
+
+\begin{document}
+
+<<setup, include=FALSE>>=
+library(knitrmini)
+opts_chunk$set(
+  cache = 2,
+  echo = FALSE,
+  message = FALSE,
+  warning = FALSE,
+  fig.width = 6,
+  fig.height = 4,
+  fig.align = "center",
+  fig.pos = "!htb"
+)
+@
+
+<<child='2_main.Rnw'>>=
+@
+
+<<child='3_appendix1.Rnw'>>=
+@
+
+\end{document}

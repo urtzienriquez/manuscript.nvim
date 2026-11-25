@@ -1,0 +1,78 @@
+\documentclass[12pt]{article}
+% fonts: under pdfLaTeX, accented letters as one glyph (searchable, hyphenated); LuaLaTeX has them
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage{lmodern}
+\fi
+
+% page layout
+\usepackage[a4paper, margin=1in]{geometry}
+
+% the switches of manuscript.nvim's variants (:Manuscript build anon, review, draft, or a journal's
+% in .manuscript.lua): all off when the paper is built otherwise
+\ifcsname ifanonymous\endcsname\else\expandafter\newif\csname ifanonymous\endcsname\fi
+\ifcsname ifdraftversion\endcsname\else\expandafter\newif\csname ifdraftversion\endcsname\fi
+\ifcsname iflinenumbers\endcsname\else\expandafter\newif\csname iflinenumbers\endcsname\fi
+\ifcsname ifdoublespacing\endcsname\else\expandafter\newif\csname ifdoublespacing\endcsname\fi
+\ifcsname iffiguresatend\endcsname\else\expandafter\newif\csname iffiguresatend\endcsname\fi
+\iflinenumbers\usepackage{lineno}\linenumbers\fi
+\ifdoublespacing\usepackage{setspace}\doublespacing\fi
+\iffiguresatend\usepackage[nolists,nomarkers]{endfloat}\fi
+
+% graphics and colours
+\usepackage[dvipsnames]{xcolor}
+\usepackage{graphicx}
+\usepackage{float}
+
+% maths and tables
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{siunitx}
+
+% bibliography
+\usepackage[style=apa, backend=biber, uniquename=false, giveninits=false]{biblatex}
+\addbibresource{references.bib}
+
+% authors and affiliations
+\usepackage{authblk}
+\renewcommand*{\Affilfont}{\footnotesize\normalfont}
+
+% links
+\usepackage{hyperref}
+\hypersetup{colorlinks=true, linkcolor=Blue, filecolor=Maroon, citecolor=Blue, urlcolor=Blue}
+
+% title and authors (the authors: not in an anonymous version)
+\input{01_title}
+\input{01_authors}
+\date{\vspace{-5ex}}
+
+\makeatletter
+% authblk's spacing
+\renewcommand\AB@affilsepx{\protect\\\vspace{\baselineskip}\protect\Affilfont}
+% the title and authors, for the appendices' title blocks
+\let\papertitle\@title
+\let\paperauthors\@author
+\makeatother
+
+% an appendix: its own page, references, and numbers (Figure S1.1, Table S1.1)
+\newcommand{\appendixsetup}[1]{
+  \newpage
+  \newrefsection
+  \setcounter{section}{0}
+  \renewcommand{\theHsection}{app#1.\arabic{section}}
+  \renewcommand{\thefigure}{S#1.\arabic{figure}}
+  \renewcommand{\theHfigure}{S#1.\arabic{figure}}
+  \setcounter{figure}{0}
+  \renewcommand{\thetable}{S#1.\arabic{table}}
+  \renewcommand{\theHtable}{S#1.\arabic{table}}
+  \setcounter{table}{0}
+}
+\newcommand{\appendixtitleblock}[1]{
+  \begin{center}
+    {\Large\textbf{Appendix #1} \textit{for:} \papertitle}
+    \vskip 1em
+    {\large\paperauthors}
+  \end{center}
+  \vskip 1.5em
+}

@@ -1,9 +1,10 @@
 -- :Manuscript merge: a revised Word file (any number of review rounds later, tracked or not) back
--- into the LaTeX or Rnoweb it was exported from. Each paragraph of the document is paired with its
+-- into the LaTeX, Rnoweb or R Markdown it was exported from. Each paragraph of the document is paired with its
 -- paragraph of the sources (by its words); the export it was made from (see find_copy) tells what
 -- each citation, \Sexpr value, reference... of the source looked like; and its differences with the
 -- document as revised are made in the source, in LaTeX: the words that changed, as little as
--- possible around them, never cutting a command or an \emph{} in two. Citations typed in the
+-- possible around them, never cutting a command or an \emph{} in two (in an .Rmd: in Markdown, see
+-- the dialects). Citations typed in the
 -- document are looked up in the .bib. The result opens in a diff view against the source; every
 -- edit, the comments and what needs a human go to the quickfix list.
 --
@@ -96,8 +97,23 @@ local INVISIBLE = { label = true, index = true, begin = true, ["end"] = true, no
 local ESCAPED = { ["%"] = true, ["&"] = true, ["_"] = true, ["#"] = true, ["$"] = true, ["{"] = true, ["}"] = true }
 local LIGATURE = { ["---"] = "—", ["--"] = "–", ["``"] = "“", ["''"] = "”", ["`"] = "‘" }
 
+-- A LaTeX command \name at p: where its name ends (`after`: its first argument, if any) and where
+-- its arguments do (`args`; a formatting command's: its first).
+local function command_span(src, p, name)
+  local after = p + 1 + #name + (src:sub(p + 1 + #name, p + 1 + #name) == "*" and 1 or 0)
+  local args = after
+  while src:sub(args, args) == "[" or src:sub(args, args) == "{" do
+    args = group_end(src, args)
+    if KIND[name] ~= "cite" and KIND[name] ~= "unit" and name ~= "SI" and name ~= "href" and src:sub(args, args) == "{" and FORMAT[name] then
+      break
+    end
+  end
+  return after, args
+end
+
 -- The tokens of LaTeX source src[s, e): words and punctuation as the document shows them, each
--- { key, text, s, e (its source), wraps (the formatting commands it is in: { s, e }) }; a
+-- { key, text, s, e (its source), wraps (the formatting commands it is in: { s, e, flags, open, close
+-- (their text around it: "\\emph{", "}") }) }; a
 -- citation, \Sexpr, reference, unit, math... one token { opaque = its kind, s, e }.
 local function tex_tokens(src, s, e, flags, wraps, out)
   out, flags, wraps = out or {}, flags or {}, wraps or {}
@@ -118,21 +134,15 @@ local function tex_tokens(src, s, e, flags, wraps, out)
       end
       p = p + 2
     elseif name then
-      local after = p + 1 + #name + (src:sub(p + 1 + #name, p + 1 + #name) == "*" and 1 or 0)
-      local args = after
-      while src:sub(args, args) == "[" or src:sub(args, args) == "{" do
-        args = group_end(src, args)
-        if KIND[name] ~= "cite" and KIND[name] ~= "unit" and name ~= "SI" and name ~= "href" and src:sub(args, args) == "{" and FORMAT[name] then
-          break
-        end
-      end
+      local after, args = command_span(src, p, name)
       if FORMAT[name] and src:sub(after, after) == "{" then -- formatting: its text, with the formatting
         local close = group_end(src, after)
         local f = vim.tbl_extend("force", {}, flags)
         if FORMAT[name] ~= "" then
           f[FORMAT[name]] = true
         end
-        tex_tokens(src, after + 1, close - 1, f, vim.list_extend(vim.list_slice(wraps), { { s = p, e = close, flags = f } }), out)
+        local wrap = { s = p, e = close, flags = f, open = src:sub(p, after), close = "}" }
+        tex_tokens(src, after + 1, close - 1, f, vim.list_extend(vim.list_slice(wraps), { wrap }), out)
         p = close
       elseif KIND[name] or (args > after and not INVISIBLE[name]) then -- one token: what it shows is known later
         add("", p, args, KIND[name] or "command")
@@ -222,6 +232,245 @@ local function regions(path, text)
   if start then
     block(start, #text + 1)
   end
+  return out
+end
+
+-- ── Markdown sources (R Markdown) ───────────────────────────────────────────
+
+local MD_LIGATURE = { ["---"] = "—", ["--"] = "–" }
+
+-- Where the run of emphasis characters `c` of length n that closes one opened before `from` is:
+-- the next run of exactly n of them, not after a space; or nil.
+local function md_closer(src, from, e, c, n)
+  local q = from
+  while true do
+    local a, b = src:find("%" .. c .. "+", q)
+    if not a or a >= e then
+      return nil
+    end
+    if b - a + 1 == n and not SPACE[char_at(src, a - 1)] and a > from then
+      return a
+    end
+    q = b + 1
+  end
+end
+
+-- The tokens of Markdown source src[s, e), as tex_tokens: words and punctuation; *emphasis*,
+-- **strong**, ^sup^, ~sub~ and [link](...) text as formatting (wraps: { s, e, flags, open, close });
+-- citations ([@a; @b], @a), `r ...` values, \@ref(...), footnotes ^[...], math, code: one token each;
+-- raw LaTeX commands as tex_tokens has them; block marks (#, >, -, 1.), {#id}, HTML: nothing.
+local function md_tokens(src, s, e, flags, wraps, out)
+  out, flags, wraps = out or {}, flags or {}, wraps or {}
+  local p = s
+  local function add(text, a, b, opaque)
+    local key = opaque and ("\0" .. #out) or ((SAME[text] or text) .. "|" .. flags_key(flags))
+    out[#out + 1] = { key = key, text = text, s = a, e = b, opaque = opaque, wraps = wraps, flags = flags }
+  end
+  local function wrap(a, b, inner_s, inner_e, f, open, close)
+    local w = { s = a, e = b, flags = f, open = open, close = close }
+    md_tokens(src, inner_s, inner_e, f, vim.list_extend(vim.list_slice(wraps), { w }), out)
+  end
+  local bol = #wraps == 0 and src:sub(1, s - 1):match("[^\n]*$"):match("^%s*$") ~= nil -- (at a line's start;
+  -- inside formatting, never)
+  while p < e do
+    local c = char_at(src, p)
+    local mark = bol and (src:match("^#+%s", p) or src:match("^[-*+]%s", p) or src:match("^%d+[.)]%s", p) or src:match("^>%s?", p))
+    if c == "\n" then
+      bol, p = true, p + 1
+    elseif SPACE[c] then
+      p = p + #c
+    elseif mark then
+      bol, p = false, p + #mark
+    else
+      bol = false
+      if src:sub(p, p + 3) == "<!--" then -- a comment
+        p = (src:find("-->", p + 4, true) or e - 3) + 3
+      elseif src:match("^\\@ref%b()", p) then -- bookdown's reference
+        local q = select(2, src:find("^\\@ref%b()", p)) + 1
+        add("", p, q, "ref")
+        p = q
+      elseif src:match("^\\[a-zA-Z]", p) then -- raw LaTeX
+        local name = src:match("^\\([a-zA-Z]+)", p)
+        local after, args = command_span(src, p, name)
+        if FORMAT[name] and src:sub(after, after) == "{" then
+          local close = group_end(src, after)
+          local f = vim.tbl_extend("force", {}, flags)
+          if FORMAT[name] ~= "" then
+            f[FORMAT[name]] = true
+          end
+          wrap(p, close, after + 1, close - 1, f, src:sub(p, after), "}")
+          p = close
+        elseif KIND[name] or (args > after and not INVISIBLE[name]) then
+          add("", p, args, KIND[name] or "command")
+          p = args
+        else
+          p = args
+        end
+      elseif c == "\\" then -- an escaped character
+        local x = char_at(src, p + 1)
+        if x ~= "" and not SPACE[x] then
+          add(x, p, p + 1 + #x)
+        end
+        p = p + 1 + math.max(#x, 1)
+      elseif c == "`" then -- code; `r ...`: a computed value
+        local ticks = src:match("^`+", p)
+        local close = src:find(ticks, p + #ticks, true)
+        local q = close and close + #ticks or e
+        add("", p, q, src:sub(p + #ticks, p + #ticks + 1) == "r " and "sexpr" or "command")
+        p = q
+      elseif c == "^" and src:sub(p + 1, p + 1) == "[" then -- a footnote
+        local q = group_end(src, p + 1)
+        add("", p, q, "footnote")
+        p = q
+      elseif c == "[" then
+        local q = group_end(src, p)
+        if src:sub(q, q) == "(" and src:find(")", q, true) then -- a link: its text
+          local r = src:find(")", q, true) + 1
+          wrap(p, r, p + 1, q - 1, flags, "[", src:sub(q - 1, r - 1))
+          p = r
+        elseif src:sub(p + 1, q - 2):find("@[%w_]") then -- a citation
+          add("", p, q, "cite")
+          p = q
+        else
+          add("[", p, p + 1)
+          p = p + 1
+        end
+      elseif c == "@" and src:match("^@[%w_]", p) and not is_word(char_at(src, p - 1)) then -- @key: a narrative citation
+        local key = src:match("^@([%w_][%w_:.#$%%&+?<>~/-]*)", p):gsub("[.:;,?/-]+$", "")
+        add("", p, p + 1 + #key, "cite")
+        p = p + 1 + #key
+      elseif c == "$" and not (src:sub(p, p + 1) ~= "$$" and src:sub(p + 1, p + 1):match("[%s%d]")) then -- math
+        local double = src:sub(p, p + 1) == "$$"
+        local stop = src:find(double and "$$" or "$", p + (double and 2 or 1), true)
+        local close = stop and stop + (double and 2 or 1) or e
+        add("", p, close, "math")
+        p = close
+      elseif c == "*" or c == "_" then -- emphasis, or the character
+        local run = src:match("^%" .. c .. "+", p)
+        local after = char_at(src, p + #run)
+        local opens = #run <= 3 and after ~= "" and not SPACE[after] and not (c == "_" and is_word(char_at(src, p - 1)))
+        local close = opens and md_closer(src, p + #run, e, c, #run)
+        if close then
+          local f = vim.tbl_extend("force", {}, flags)
+          f.i = (#run ~= 2) or f.i
+          f.b = (#run >= 2) or f.b
+          wrap(p, close + #run, p + #run, close, f, run, run)
+          p = close + #run
+        else
+          for k = 0, #run - 1 do
+            add(c, p + k, p + k + 1)
+          end
+          p = p + #run
+        end
+      elseif (c == "^" or c == "~") and src:find(c, p + 1, true) and not src:sub(p + 1, src:find(c, p + 1, true) - 1):find("%s")
+        and src:find(c, p + 1, true) > p + 1 then -- ^sup^, ~sub~ (no spaces in them)
+        local close = src:find(c, p + 1, true)
+        local f = vim.tbl_extend("force", {}, flags)
+        f[c == "^" and "sup" or "sub"] = true
+        wrap(p, close + 1, p + 1, close, f, c, c)
+        p = close + 1
+      elseif c == "<" and src:match("^</?%a[^>]*>", p) then -- HTML
+        p = p + #src:match("^</?%a[^>]*>", p)
+      elseif c == "{" and src:match("^{[#.%-][^}]*}", p) then -- {#id .class}, {-}
+        p = p + #src:match("^{[#.%-][^}]*}", p)
+      elseif MD_LIGATURE[src:sub(p, p + 2)] or MD_LIGATURE[src:sub(p, p + 1)] then
+        local lig = MD_LIGATURE[src:sub(p, p + 2)] and src:sub(p, p + 2) or src:sub(p, p + 1)
+        add(MD_LIGATURE[lig], p, p + #lig)
+        p = p + #lig
+      elseif is_word(c) then
+        local q = p
+        while q < e and is_word(char_at(src, q)) do
+          q = q + #char_at(src, q)
+        end
+        add(src:sub(p, q - 1), p, q)
+        p = q
+      else
+        add(c, p, p + #c)
+        p = p + #c
+      end
+    end
+  end
+  return out
+end
+
+-- The paragraphs of an R Markdown file, as regions: blocks between blank lines (not its YAML
+-- header, code chunks or comments), headings, and chunks' fig.cap="...".
+local function md_regions(path, text)
+  local out = {}
+  local function add(s, e, least)
+    local words = vim.tbl_filter(function(t) return not t.opaque and t.text:match("%a") end, md_tokens(text, s, e))
+    if #words >= least then
+      out[#out + 1] = { path = path, s = s, e = e, line = select(2, text:sub(1, s):gsub("\n", "")) + 1 }
+    end
+  end
+  local function block(s, e)
+    local b = text:sub(s, e - 1)
+    if b:match("^%s*\\begin{figure") or b:match("^%s*\\begin{table") then
+      local from = 1
+      while true do -- (a raw LaTeX figure's caption)
+        local a, b2 = b:find("\\caption%*?%b{}", from)
+        if not a then
+          break
+        end
+        local open = b:find("{", a, true)
+        add(s + open, s + group_end(b, open) - 2, 1)
+        from = b2 + 1
+      end
+    else
+      add(s, e, 2)
+    end
+  end
+  local start, fence, comment, pos = nil, nil, false, 1
+  local lines = vim.split(text, "\n", { plain = true })
+  local k = 1
+  if lines[1] and lines[1]:match("^%-%-%-%s*$") then -- the YAML header
+    pos = #lines[1] + 2
+    k = 2
+    while lines[k] and not lines[k]:match("^%-%-%-%s*$") and not lines[k]:match("^%.%.%.%s*$") do
+      pos, k = pos + #lines[k] + 1, k + 1
+    end
+    pos, k = pos + #(lines[k] or "") + 1, k + 1
+  end
+  local function flush(stop)
+    if start then
+      block(start, stop)
+    end
+    start = nil
+  end
+  while k <= #lines do
+    local line = lines[k]
+    local s = pos
+    pos = pos + #line + 1
+    if fence then
+      if line:match("^%s*" .. fence .. "%s*$") then
+        fence = nil
+      end
+    elseif comment then
+      comment = not line:find("-->", 1, true)
+    elseif line:match("^%s*```") or line:match("^%s*~~~") then -- a code chunk (its caption: a region)
+      flush(s - 1)
+      fence = line:match("^%s*(```+)") or line:match("^%s*(~~~+)")
+      local q, cap = line:match("fig%.cap%s*=%s*(['\"])(.-)%1")
+      if cap and cap ~= "" then
+        local at = s + line:find(cap, 1, true) - 1
+        add(at, at + #cap, 1)
+      end
+    elseif line:match("^%s*<!%-%-") then
+      flush(s - 1)
+      comment = not line:find("-->", 1, true)
+    elseif line:match("^%s*#+%s") then -- a heading: a region of its own
+      flush(s - 1)
+      local a = s + #line:match("^%s*#+%s+")
+      local b = s + #line - #(line:match("%s*{[^}]*}%s*$") or line:match("%s*$"))
+      add(a, b, 1)
+    elseif line:match("^%s*$") then
+      flush(s - 1)
+    else
+      start = start or s
+    end
+    k = k + 1
+  end
+  flush(#text + 1)
   return out
 end
 
@@ -331,11 +580,76 @@ local function escape(c)
   return SPACE[c] or c
 end
 
-local WRAP = { i = "\\emph{", b = "\\textbf{", sup = "\\textsuperscript{", sub = "\\textsubscript{" }
+-- ── Dialects: what a source is written in ───────────────────────────────────
+-- Each: tokens(src, s, e), regions(path, text), escape(c), wrap[flag] = { open, close }, cite(keys),
+-- cite_keys(source of a citation), has_cite(text), footnote(text), math(tex, display),
+-- join(text) (formatting written twice in a row: once), space (a Lua pattern class).
 
--- LaTeX for characters of the document: formatting (but what the source has around them already,
--- `base`), escapes; citations written as text become \parencite{...} when the .bib knows them.
-local function latex(chars, base, bib, prefer, issues, where)
+local LATEX = {
+  tokens = function(src, s, e) return tex_tokens(src, s, e) end,
+  regions = regions,
+  escape = escape,
+  wrap = { i = { "\\emph{", "}" }, b = { "\\textbf{", "}" }, sup = { "\\textsuperscript{", "}" }, sub = { "\\textsubscript{", "}" } },
+  cite = function(keys) return "\\parencite{" .. table.concat(keys, ",") .. "}" end,
+  cite_keys = function(text)
+    local out = {}
+    for key in text:gmatch("{([^{}]*)}%s*$") do
+      vim.list_extend(out, vim.split(key:gsub("%s", ""), ",", { trimempty = true }))
+    end
+    return out
+  end,
+  has_cite = function(text) return text:find("\\parencite") ~= nil end,
+  footnote = function(text) return "\\footnote{" .. text:gsub("[\\%%&_#$]", "\\%0") .. "}" end,
+  math = function(tex, display) return (display and "$$" or "$") .. tex .. (display and "$$" or "$") end,
+  join = function(text)
+    for _, cmd in ipairs({ "\\emph{", "\\textbf{" }) do -- ("\emph{a} \emph{b}", from two places: one)
+      text = text:gsub(cmd .. "([^{}]*)}(%s+)" .. cmd, cmd .. "%1%2")
+    end
+    return text
+  end,
+  space = "[%s~]",
+}
+
+local MD_ESCAPE = { ["\\"] = true, ["*"] = true, ["_"] = true, ["`"] = true, ["["] = true, ["]"] = true,
+  ["@"] = true, ["$"] = true, ["^"] = true, ["~"] = true, ["<"] = true, ["#"] = true }
+local MARKDOWN = {
+  tokens = function(src, s, e) return md_tokens(src, s, e) end,
+  regions = md_regions,
+  escape = function(c)
+    if MD_ESCAPE[c] then
+      return "\\" .. c
+    end
+    return (c == "\t" or c == "\n") and " " or c
+  end,
+  wrap = { i = { "*", "*" }, b = { "**", "**" }, sup = { "^", "^" }, sub = { "~", "~" } },
+  cite = function(keys) return "[" .. table.concat(vim.tbl_map(function(k) return "@" .. k end, keys), "; ") .. "]" end,
+  cite_keys = function(text)
+    local out = {}
+    for key in text:gmatch("@([%w_][%w_:.#$%%&+?<>~/-]*)") do
+      out[#out + 1] = (key:gsub("[.:;,?/-]+$", ""))
+    end
+    return out
+  end,
+  has_cite = function(text) return text:find("%[[^%]]*@") ~= nil end,
+  footnote = function(text) return "^[" .. text:gsub("[%[%]\\]", "\\%0") .. "]" end,
+  math = LATEX.math,
+  join = function(text) -- ("*a* *b*", from two places: one)
+    text = text:gsub("%*%*([^*]*)%*%*(%s+)%*%*", "**%1%2")
+    return (text:gsub("%f[*]%*([^*]+)%*(%s+)%*%f[^*]", "*%1%2"))
+  end,
+  space = "%s",
+}
+
+-- The dialect of a source file, by its name: Markdown for R Markdown (.Rmd), Quarto, Markdown.
+local function dialect_for(path)
+  local name = path:lower()
+  return (name:match("%.rmd$") or name:match("%.qmd$") or name:match("%.md$")) and MARKDOWN or LATEX
+end
+
+-- Source text for characters of the document, in dialect D: formatting (but what the source has
+-- around them already, `base`), escapes; citations written as text become citations (\parencite{...})
+-- when the .bib knows them.
+local function write(chars, base, bib, prefer, issues, where, D)
   local plain = table.concat(vim.tbl_map(function(c) return c.ch ~= "" and c.ch or "\1" end, chars))
   local cites, at = {}, {} -- (by byte position in plain -> character index)
   local pos = 1
@@ -355,7 +669,7 @@ local function latex(chars, base, bib, prefer, issues, where)
       end
     end
     if #missing == 0 and at[cite.a] and at[cite.b] then
-      cites[at[cite.a]] = { stop = at[cite.b], text = "\\parencite{" .. table.concat(keys, ",") .. "}" }
+      cites[at[cite.a]] = { stop = at[cite.b], text = D.cite(keys) }
     elseif #missing > 0 then
       issues[#issues + 1] = vim.tbl_extend("force", where, {
         text = "citation not found in the .bib: " .. table.concat(missing, "; "),
@@ -368,15 +682,14 @@ local function latex(chars, base, bib, prefer, issues, where)
     for n = #open, 1, -1 do
       if not f[open[n]] then
         for _ = n, #open do
-          out[#out + 1] = "}"
-          table.remove(open)
+          out[#out + 1] = D.wrap[table.remove(open)][2]
         end
         break
       end
     end
     for _, flag in ipairs({ "b", "i", "sup", "sub" }) do
       if f[flag] and not base[flag] and not vim.tbl_contains(open, flag) then
-        out[#out + 1] = WRAP[flag]
+        out[#out + 1] = D.wrap[flag][1]
         open[#open + 1] = flag
       end
     end
@@ -402,11 +715,11 @@ local function latex(chars, base, bib, prefer, issues, where)
         set(f)
       end
       if c.footnote then
-        out[#out + 1] = "\\footnote{" .. c.footnote.text:gsub("[\\%%&_#$]", "\\%0") .. "}"
+        out[#out + 1] = D.footnote(c.footnote.text)
       elseif c.math then
-        out[#out + 1] = (c.math.display and "$$" or "$") .. c.math.tex .. (c.math.display and "$$" or "$")
+        out[#out + 1] = D.math(c.math.tex, c.math.display)
       elseif c.ch ~= "" then
-        out[#out + 1] = escape(c.ch)
+        out[#out + 1] = D.escape(c.ch)
       end
       k = k + 1
     end
@@ -443,9 +756,9 @@ end
 
 -- The source of a paragraph (src[s, e)) with the edits of the document (sent -> revised), and
 -- what needs a human.
-local function merge_paragraph(src, s, e, sent, revised, bib, where)
+local function merge_paragraph(src, s, e, sent, revised, bib, where, D)
   local issues = {}
-  local R, O, N = tex_tokens(src, s, e), char_tokens(sent), char_tokens(revised)
+  local R, O, N = D.tokens(src, s, e), char_tokens(sent), char_tokens(revised)
   -- 1. what the source's citations, values... showed as: where it and the sent text differ
   -- where the source already reads as the revised text (its edits taken already: a merge done
   -- again): at_n[i], the revised token that source token i is
@@ -721,15 +1034,15 @@ local function merge_paragraph(src, s, e, sent, revised, bib, where)
     local parts, open, ok, last_y, done_group = {}, {}, true, nil, nil
     local first_converted, last_converted -- (whether the edit starts, ends with revised text)
     local function close_all()
-      for _ = 1, #open do
-        parts[#parts + 1] = "}"
+      for n = #open, 1, -1 do
+        parts[#parts + 1] = open[n].close
       end
       open = {}
     end
     local function spacing(y) -- (the revised text's spacing before its token y)
       if last_y and N[last_y] and N[y] and #parts > 0 then
         local between = vim.list_slice(revised, N[last_y].i2 + 1, N[y].i1 - 1)
-        parts[#parts + 1] = table.concat(vim.tbl_map(function(ch) return escape(ch.ch) end, between))
+        parts[#parts + 1] = table.concat(vim.tbl_map(function(ch) return D.escape(ch.ch) end, between))
       end
     end
     local function converted(y1, y2, prefer) -- (revised tokens y1..y2, in LaTeX)
@@ -739,8 +1052,8 @@ local function merge_paragraph(src, s, e, sent, revised, bib, where)
       close_all()
       spacing(y1)
       prefer = vim.fn.uniq(vim.fn.sort(prefer or {}))
-      local text = latex(vim.list_slice(revised, N[y1].i1, N[y2].i2), base, bib, #prefer > 0 and prefer or nil, issues, where)
-      if #prefer > 0 and not text:find("\\parencite") then
+      local text = write(vim.list_slice(revised, N[y1].i1, N[y2].i2), base, bib, #prefer > 0 and prefer or nil, issues, where, D)
+      if #prefer > 0 and not D.has_cite(text) then
         issues[#issues + 1] = vim.tbl_extend("force", where, { text = "a citation was edited, check it: " .. text })
       end
       if first_converted == nil then
@@ -759,8 +1072,7 @@ local function merge_paragraph(src, s, e, sent, revised, bib, where)
         for n = #open, 1, -1 do -- (formatting it is not in: closed)
           if not vim.tbl_contains(want, open[n]) then
             for _ = n, #open do
-              parts[#parts + 1] = "}"
-              table.remove(open)
+              parts[#parts + 1] = table.remove(open).close
             end
             break
           end
@@ -768,7 +1080,7 @@ local function merge_paragraph(src, s, e, sent, revised, bib, where)
         spacing(y)
         for _, w in ipairs(want) do
           if not vim.tbl_contains(open, w) then
-            parts[#parts + 1] = src:sub(w.s, src:find("{", w.s, true))
+            parts[#parts + 1] = w.open
             open[#open + 1] = w
           end
         end
@@ -812,9 +1124,7 @@ local function merge_paragraph(src, s, e, sent, revised, bib, where)
           elseif g.kind == "text" then
             ok = false
           elseif g.kind == "cite" then
-            for key in src:sub(g.s, g.e - 1):gmatch("{([^{}]*)}%s*$") do
-              vim.list_extend(prefer, vim.split(key:gsub("%s", ""), ",", { trimempty = true }))
-            end
+            vim.list_extend(prefer, D.cite_keys(src:sub(g.s, g.e - 1)))
           elseif g.kind and g.kind ~= "generated" and not (g.reported or deleted) then -- (a computed value, a reference... edited)
             g.reported, ok = true, false
             issues[#issues + 1] = vim.tbl_extend("force", where, {
@@ -842,18 +1152,15 @@ local function merge_paragraph(src, s, e, sent, revised, bib, where)
       end
     end
     if ok then
-      local text = table.concat(parts)
-      for _, cmd in ipairs({ "\\emph{", "\\textbf{" }) do -- ("\emph{a} \emph{b}", from two places: one)
-        text = text:gsub(cmd .. "([^{}]*)}(%s+)" .. cmd, cmd .. "%1%2")
-      end
+      local text = D.join(table.concat(parts))
       local a, b = edit.A - s + 1, edit.B - s + 1
       local function between(p, q) -- (the revised text's spacing between its tokens p and q)
-        return N[p] and N[q] and table.concat(vim.tbl_map(function(ch) return escape(ch.ch) end, vim.list_slice(revised, N[p].i2 + 1, N[q].i1 - 1))) or nil
+        return N[p] and N[q] and table.concat(vim.tbl_map(function(ch) return D.escape(ch.ch) end, vim.list_slice(revised, N[p].i2 + 1, N[q].i1 - 1))) or nil
       end
       if text ~= "" then -- (rewritten at an end: the spacing there, as the revised text has it)
         local before, after = first_converted and between(y1 - 1, y1), last_converted and between(y2, y2 + 1)
         if before then
-          local own = out:sub(1, a - 1):match("[%s~]*$")
+          local own = out:sub(1, a - 1):match(D.space .. "*$")
           if own == "" then
             text = before .. text
           elseif before == "" then
@@ -861,7 +1168,7 @@ local function merge_paragraph(src, s, e, sent, revised, bib, where)
           end
         end
         if after then
-          local own = out:sub(b):match("^[%s~]*")
+          local own = out:sub(b):match("^" .. D.space .. "*")
           if own == "" then
             text = text .. after
           elseif after == "" then
@@ -1050,11 +1357,9 @@ function M.compute(buf, paths, opts)
   local bibs = {}
   for _, path in ipairs(paths) do
     local text = source_text(path)
-    sources[path] = { text = text, edits = {} }
-    vim.list_extend(all, regions(path, text))
-    for bib in text:gmatch("\\addbibresource%b{}") do
-      bibs[#bibs + 1] = vim.fs.joinpath(vim.fs.dirname(path), bib:sub(17, -2))
-    end
+    sources[path] = { text = text, edits = {}, D = dialect_for(path) }
+    vim.list_extend(all, sources[path].D.regions(path, text))
+    vim.list_extend(bibs, require("manuscript.project").bibs(text, vim.fs.dirname(path))) -- (\addbibresource, an .Rmd's YAML...)
   end
   for _, dir in ipairs(vim.tbl_map(vim.fs.dirname, paths)) do
     for name in vim.fs.dir(dir) do
@@ -1066,7 +1371,7 @@ function M.compute(buf, paths, opts)
   local bib = read_bib(vim.fn.uniq(vim.fn.sort(bibs)))
   local source_tokens = {}
   for _, path in ipairs(paths) do
-    vim.list_extend(source_tokens, tex_tokens(sources[path].text, 1, #sources[path].text + 1))
+    vim.list_extend(source_tokens, sources[path].D.tokens(sources[path].text, 1, #sources[path].text + 1))
   end
   local copy_path, copy = nil, nil
   if opts.sent then
@@ -1081,7 +1386,7 @@ function M.compute(buf, paths, opts)
     copy_bags[k] = { words(char_tokens(chars)) }
   end
   for _, r in ipairs(all) do
-    r.bag, r.n = words(tex_tokens(sources[r.path].text, r.s, r.e))
+    r.bag, r.n = words(sources[r.path].D.tokens(sources[r.path].text, r.s, r.e))
   end
 
   -- each paragraph of the document: its text as sent and as revised, and its source paragraph
@@ -1170,13 +1475,13 @@ function M.compute(buf, paths, opts)
     if best then
       previous = best
       -- (also when nothing is tracked: edits made without tracking, or accepted already, count)
-      local text, found = merge_paragraph(sources[best.path].text, best.s, best.e, sent, revised, bib, where)
+      local text, found = merge_paragraph(sources[best.path].text, best.s, best.e, sent, revised, bib, where, sources[best.path].D)
       if text ~= sources[best.path].text:sub(best.s, best.e - 1) then
         table.insert(sources[best.path].edits, { s = best.s, e = best.e, text = text })
       end
       vim.list_extend(issues, found)
     elseif #O == 0 and #char_tokens(revised) > 0 then -- a paragraph the document added
-      local text = latex(revised, {}, bib, nil, issues, where)
+      local text = write(revised, {}, bib, nil, issues, where, previous and sources[previous.path].D or LATEX)
       if previous then
         table.insert(sources[previous.path].edits, { s = previous.e, e = previous.e, text = "\n\n" .. text })
         issues[#issues + 1] = { filename = previous.path, lnum = previous.line, text = "new paragraph after this one: check where it goes" }
@@ -1272,15 +1577,9 @@ local function word_pairs(tokens)
   end
   return bag, n
 end
--- The files of a manuscript the merge edits: its root and its parts.
+-- The files of a manuscript the merge edits: its root, its parts, and what they \input{}.
 local function sources(project)
-  local out = { project.root }
-  for _, part in ipairs(project.parts) do
-    if part.file ~= project.root and vim.uv.fs_stat(part.file) then
-      out[#out + 1] = part.file
-    end
-  end
-  return out
+  return vim.tbl_filter(function(file) return vim.uv.fs_stat(file) ~= nil end, project.files)
 end
 
 -- The Word files of its exports, the last first.
@@ -1329,7 +1628,7 @@ local function recall(buf)
       local tokens = {}
       for _, path in ipairs(sources(project)) do
         local text = source_text(path)
-        vim.list_extend(tokens, tex_tokens(text, 1, #text + 1))
+        vim.list_extend(tokens, dialect_for(path).tokens(text, 1, #text + 1))
       end
       local score = share(tokens)
       for _, path in ipairs(vim.list_extend(exports(project), M.documents_near(sources(project)))) do

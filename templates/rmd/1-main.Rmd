@@ -1,0 +1,18 @@
+\maketitle
+
+\begin{abstract}
+\end{abstract}
+
+# Introduction
+
+# Methods
+
+# Results
+
+# Discussion
+
+\ifanonymous\else
+# Acknowledgements {-}
+\fi
+
+\printbibliography[heading=bibnumbered, title={References}]

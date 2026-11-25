@@ -4,9 +4,13 @@
 -- knit.lua), into <part>.tex/.pdf beside the root; the whole into <root>.tex/.pdf. The auxiliary
 -- files stay there, so latexmk only reruns what it must: one LaTeX pass for a text edit.
 --
--- A full build keeps the labels of the whole (<root>-labels.aux, knitrmini's snapshot), with
--- which a part's references to the others get their numbers; a part built before any full build
--- makes one first.
+-- An .Rmd is rendered into its .tex, then built by latexmk; a .tex root's part is a copy of the
+-- root without the other parts, built in the cache. Standalone figures it includes are built first
+-- (see figures.lua).
+--
+-- A full build keeps the labels of the whole (knitrmini's snapshot, <root>-labels.aux; else the
+-- whole's .aux, see labels.lua), with which a part's references to the others get their numbers;
+-- a part built before any full build makes one first.
 local job = require("manuscript.job")
 local project_ = require("manuscript.project")
 local knit = require("manuscript.knit")
@@ -20,14 +24,23 @@ local function base(path)
   return (vim.fs.basename(path):gsub("%.[^.]+$", ""))
 end
 
--- The part a file is in: { name, file }, or nil (the root, or another file: the whole).
+-- The part a file is in: { name, file }, or nil (the root, or another file: the whole). A part's
+-- file or one it includes; a file the root includes, outside the parts: the root's own part (a .tex
+-- root's "main"), if it has one.
 function M.part_of(project, file)
   file = file and vim.fs.normalize(file)
+  if not file or file == project.root then
+    return nil
+  end
+  local own
   for _, part in ipairs(project.parts) do
-    if part.file == file and part.file ~= project.root then
+    if part.file == project.root then
+      own = part
+    elseif part.file == file or vim.tbl_contains(project_.files(part.file, project.dir), file) then
       return part
     end
   end
+  return own and vim.tbl_contains(project.files, file) and own or nil
 end
 
 -- LaTeX's errors in a log ("! message", then "l.<line> ..."), as quickfix items in the .tex.
@@ -49,10 +62,7 @@ end
 -- The errors at their line in the sources, where it is there as it is in the .tex (most lines
 -- are: knitting changes only chunks and \Sexpr{}); else in the .tex.
 function M.in_sources(items, project)
-  local files = { project.root }
-  for _, part in ipairs(project.parts) do
-    files[#files + 1] = part.file
-  end
+  local files = project.files
   local cache = {}
   local function lines(path)
     cache[path] = cache[path] or vim.split(project_.read(path) or "", "\n", { plain = true })
@@ -86,7 +96,7 @@ function M.in_sources(items, project)
   return items
 end
 
-local function show(items, title)
+function M.show(items, title)
   vim.schedule(function()
     local current = vim.fn.getqflist({ title = true }).title
     if #items > 0 then
@@ -105,10 +115,28 @@ local compile
 local took
 M.times = vim.fs.joinpath(vim.fn.stdpath("cache"), "manuscript", "build-times.json")
 
--- Knits (and compiles) `name`'s copy of the root: only `part`'s child, or all if nil. `label`: what
--- it is, in the progress message (nil: the build itself).
-local function make(project, name, part, label)
-  local key, started = project.root .. ":" .. name, vim.uv.hrtime()
+-- Where a build's LaTeX runs: .build/<target>/ in the manuscript's folder (its .tex, latexmk's
+-- files; the PDF is copied beside the root). .build/ keeps itself out of git.
+function M.dir(project, target)
+  local top = vim.fs.joinpath(project.dir, ".build")
+  local dir = vim.fs.joinpath(top, target)
+  vim.fn.mkdir(dir, "p")
+  local ignore = vim.fs.joinpath(top, ".gitignore")
+  if not vim.uv.fs_stat(ignore) then
+    vim.fn.writefile({ "*" }, ignore)
+  end
+  return dir
+end
+
+-- Builds the whole (o.part nil) or a part: knitted (or rendered, or a .tex part's copy) into
+-- .build/<target>/<target>.tex, then LaTeX, under the name o.job (default: the target's), with the
+-- switches of o.variant. o.label: what it is, in the progress message (nil: the build itself);
+-- o.inside: its PDF stays in .build/ (not copied beside the root).
+-- Returns { tex, log } (what LaTeX read and wrote: for its errors).
+local function make(project, o)
+  o = o or {}
+  local job_name = o.job or (o.part and o.part.name or project.name)
+  local key, started = project.root .. ":" .. job_name, vim.uv.hrtime()
   if not took then
     local ok, saved = pcall(vim.json.decode, project_.read(M.times) or "")
     took = ok and type(saved) == "table" and saved or {}
@@ -116,7 +144,7 @@ local function make(project, name, part, label)
   local times = took[key] or {}
   local sorted = vim.fn.sort(vim.deepcopy(times), "f")
   job.estimate(sorted[math.floor(#sorted / 2) + 1]) -- (their median: an unchanged build, or the first, aside)
-  local out = compile(project, name, part, label)
+  local out = compile(project, o.part, o.label, job_name, o.variant, o.inside)
   table.insert(times, (vim.uv.hrtime() - started) / 1e9)
   took[key] = vim.list_slice(times, math.max(#times - 4, 1))
   for k in pairs(took) do -- (only of manuscripts still there)
@@ -130,65 +158,72 @@ local function make(project, name, part, label)
   return out
 end
 
-function compile(project, name, part, label)
-  local dir, opts = project.dir, project.options
+function compile(project, part, label, job_name, variant, inside)
+  local dir = project.dir
+  local labels = require("manuscript.labels")
   local function say(step)
     job.say(label and label .. ": " .. step or step)
   end
-  local out = name .. ".tex"
-  if not project.rnw then -- (a .tex manuscript: just LaTeX)
-    out = vim.fs.basename(project.root)
-  else
-    local copy = "_manuscript-" .. name .. ".Rnw"
-    local f = assert(io.open(vim.fs.joinpath(dir, copy), "w"))
-    f:write(knit.root_for(project_.read(project.root), part and part.file, dir))
-    f:close()
-    local snapshot = vim.fs.joinpath(dir, base(project.root) .. "-labels.aux")
-    if part and vim.uv.fs_stat(snapshot) then -- (the labels of the whole, for its references)
-      vim.uv.fs_copyfile(snapshot, vim.fs.joinpath(dir, "_manuscript-" .. name .. "-labels.aux"))
-    end
-    local expr = (opts.knit or "knitrmini") == "knitrmini" -- (not quiet: its chunks, and LaTeX, for the progress)
-      and ("knitrmini::knit(%q, output = %q, engine = %q, quiet = FALSE)"):format(copy, out, opts.latex)
-      or ("knitr::knit(%q, output = %q, quiet = TRUE)"):format(copy, out)
+  local target = part and part.name or project.name
+  local outdir = M.dir(project, target)
+  local rel = ".build/" .. target -- (latexmk runs where the root is: its \input{}s, figures, .bib)
+  local tex = rel .. "/" .. target .. ".tex"
+  local snapshot = labels.snapshot(project) -- (the whole's labels: a part's references to the others)
+  local how = knit.knitter(project)
+  if project.kind == "tex" and part then -- (a copy of the root without the other parts)
+    local copy = vim.fs.joinpath(dir, knit.tex_part(project, part, target))
+    assert(vim.uv.fs_rename(copy, vim.fs.joinpath(dir, tex)))
+  elseif project.kind == "tex" then
+    tex = vim.fs.basename(project.root)
+  elseif how == "rmarkdown" then -- (an .Rmd with an output format: rmarkdown's render)
     say("knitting")
-    local r = job.run({ "Rscript", "-e", expr }, { cwd = dir, line = function(line)
+    knit.render(project, target, part and part.file, vim.fs.joinpath(dir, tex), nil, function(line)
+      local chunk = line:match("label:%s*(%S+)") or line:match("%[([%w_.-]+)%]%s*$")
+      if line:match("pandoc") and line:match("%-%-to") then
+        say("pandoc")
+      elseif chunk then
+        say(("knitting (%s)"):format(chunk))
+      end
+    end)
+    if part then
+      labels.resolve_file(vim.fs.joinpath(dir, tex), snapshot)
+    end
+  else -- knitted: knitrmini or knitr (.Rnw, .Rmd), Knit.jl (.jnw); LaTeX is run here, the same for all
+    say("knitting")
+    knit.knit(project, target, part and part.file, tex, false, nil, function(line)
       local chunk = line:match("^%s*| (%S+)")
       if chunk and chunk ~= "inline" then
         say(("knitting (%s)"):format(chunk))
-      elseif line:match("^%s*latexmk %(") then
-        say("LaTeX")
       end
-    end })
-    if not vim.uv.fs_stat(vim.fs.joinpath(dir, out)) or (r.code ~= 0 and not (r.stderr or ""):find("PDF not produced", 1, true)) then
-      knit.clean(dir)
-      job.fail(("knitting %s failed:\n%s"):format(name, job.tail(r)))
-    end
-    if not part then -- (a full build: its labels, for the parts)
-      local written = vim.fs.joinpath(dir, "_manuscript-" .. name .. "-labels.aux")
-      if vim.uv.fs_stat(written) then
-        os.rename(written, snapshot)
-      end
-    end
-    knit.clean(dir)
-    if (opts.knit or "knitrmini") == "knitrmini" then
-      return out
+    end)
+    if part and how == "knitr" then -- (knitrmini and Knit.jl resolve them from the snapshot)
+      labels.resolve_file(vim.fs.joinpath(dir, tex), snapshot)
     end
   end
-  -- (knitr, or a .tex manuscript: latexmk here; under its own name, if not the root's)
   say("LaTeX")
-  local cmd = { "latexmk", require("manuscript").latexmk_flag(opts.latex), "-interaction=nonstopmode", out }
-  if base(out) ~= name then
-    table.insert(cmd, #cmd, "-jobname=" .. name)
+  job.run({ "latexmk", require("manuscript").latexmk_flag(knit.engine(project)), "-interaction=nonstopmode",
+    "-outdir=" .. rel, "-jobname=" .. job_name, "-usepretex=" .. require("manuscript.variants").pretex(project, variant),
+    tex }, { cwd = dir })
+  local pdf, log = vim.fs.joinpath(outdir, job_name .. ".pdf"), vim.fs.joinpath(outdir, job_name .. ".log")
+  if vim.uv.fs_stat(pdf) and not inside then
+    vim.uv.fs_copyfile(pdf, vim.fs.joinpath(dir, job_name .. ".pdf"))
   end
-  job.run(cmd, { cwd = dir })
-  return out
+  if not part and not variant and job_name == project.name and #M.errors(log, tex) == 0 then
+    labels.write_snapshot(project, vim.fs.joinpath(outdir, job_name .. ".aux")) -- (a full build's, without errors)
+  end
+  return { tex = vim.fs.joinpath(dir, tex), log = log }
 end
 
 M.make = make
 
--- :Manuscript build [part|all] [name.pdf]: the part of the current file (or the whole); with a
--- name.pdf, built under that name (name.tex, name.pdf...; the usual ones stay as they were).
--- on_done(ok).
+-- Whether the whole has been built (its labels: the numbers of a part's references to the others).
+function M.has_labels(project)
+  return vim.uv.fs_stat(require("manuscript.labels").snapshot(project)) ~= nil
+end
+
+-- :Manuscript build [part|all] [variant] [name.pdf]: the part of the current file (or the whole);
+-- with a variant (see variants.lua), its PDF is <part>-<variant>.pdf; with a name.pdf, built under
+-- that name (the usual PDF stays as it was). on_done(ok).
 function M.run(args, on_done)
   local as
   args = vim.tbl_filter(function(arg)
@@ -206,6 +241,13 @@ function M.run(args, on_done)
   running = true
   job.task(function()
     local project = project_.find(file)
+    local variants = require("manuscript.variants")
+    local variant
+    args = vim.tbl_filter(function(arg)
+      local named = variants.all(project)[arg] and not vim.iter(project.parts):find(function(p) return p.name == arg end)
+      variant = named and arg or variant
+      return not named
+    end, args)
     local part
     if args[1] and args[1] ~= "all" then
       part = vim.iter(project.parts):find(function(p) return p.name == args[1] end)
@@ -216,12 +258,14 @@ function M.run(args, on_done)
     if #project.parts < 2 then
       part = nil
     end
-    if project.rnw then
-      job.need("Rscript", "to knit .Rnw files")
+    if project.kind == "jnw" then
+      job.need("julia", "to knit " .. vim.fs.basename(project.root))
+    elseif project.kind ~= "tex" then
+      job.need("Rscript", "to knit " .. vim.fs.basename(project.root))
     end
     job.need("latexmk", "to build the PDF")
     local whole = base(project.root)
-    local name = part and part.name or whole
+    local name = (part and part.name or whole) .. (variant and "-" .. variant or "")
     if as then
       local own = as:gsub("%.pdf$", "")
       local taken = vim.tbl_map(function(p) return p.name end, project.parts)
@@ -234,13 +278,21 @@ function M.run(args, on_done)
       name = own
     end
     job.title("build " .. name)
-    if part and project.rnw and not vim.uv.fs_stat(vim.fs.joinpath(project.dir, whole .. "-labels.aux")) then
-      make(project, whole, nil, "the whole first (for the numbers of references)")
+    require("manuscript.figures").update(project)
+    local ok, made = pcall(function()
+      if part and not M.has_labels(project) then
+        make(project, { label = "the whole first (for the numbers of references)" })
+      end
+      return make(project, { part = part, job = name, variant = variant })
+    end)
+    if not ok then -- (its copies, knitr's figures: not left over)
+      knit.clean(project.dir)
+      error(made, 0)
     end
-    local out = make(project, name, part)
     local pdf = vim.fs.joinpath(project.dir, name .. ".pdf")
-    local found = M.in_sources(M.errors(vim.fs.joinpath(project.dir, name .. ".log"), vim.fs.joinpath(project.dir, out)), project)
-    show(found, "manuscript build: " .. name)
+    local found = M.in_sources(M.errors(made.log, made.tex), project)
+    knit.clean(project.dir) -- (a part's copy, knitr's figures: read for the errors, not needed now)
+    M.show(found, "manuscript build: " .. name)
     if #found > 0 then
       job.fail(("%s has LaTeX errors: %d in the quickfix list"):format(name, #found))
     elseif not vim.uv.fs_stat(pdf) then
@@ -280,7 +332,7 @@ function M.watch(on, quiet)
     watching = vim.api.nvim_create_augroup("manuscript_build_watch", { clear = true })
     vim.api.nvim_create_autocmd("BufWritePost", {
       group = watching,
-      pattern = { "*.Rnw", "*.rnw", "*.tex", "*.bib" },
+      pattern = { "*.Rnw", "*.rnw", "*.Rmd", "*.rmd", "*.jnw", "*.Jnw", "*.tex", "*.bib" },
       callback = function(ev)
         if vim.fs.basename(ev.file):match("^_manuscript") then
           return
@@ -317,8 +369,8 @@ local function other_builds(project, names)
   for file in vim.fs.dir(project.dir) do
     local name = file:match("^(.+)%.fdb_latexmk$")
     if name and not name:match("^_manuscript") and not vim.tbl_contains(names, name) then
-      local p = project.rnw and preamble(vim.fs.joinpath(project.dir, name .. ".tex"))
-      local fdb = not project.rnw and project_.read(vim.fs.joinpath(project.dir, file)) or ""
+      local p = project.kind ~= "tex" and preamble(vim.fs.joinpath(project.dir, name .. ".tex"))
+      local fdb = project.kind == "tex" and project_.read(vim.fs.joinpath(project.dir, file)) or ""
       if p and ours[p] or fdb:find('"' .. vim.fs.basename(project.root) .. '"', 1, true) then
         found[#found + 1] = name
       end
@@ -328,9 +380,26 @@ local function other_builds(project, names)
   return found
 end
 
--- :Manuscript clean [part|name|all]: the auxiliary files of the builds: of every build of the
--- manuscript (the whole, each part, and under other names) and the labels of the whole, or of one
--- build's. The knitted .tex and the PDF stay.
+-- The builds in .build/ named `name` (a variant's, or under a name of its own): their files, in
+-- whichever target's folder they are.
+local function built_as(project, name)
+  local found = {}
+  local top = vim.fs.joinpath(project.dir, ".build")
+  for target, kind in vim.fs.dir(top) do
+    if kind == "directory" then
+      for file in vim.fs.dir(vim.fs.joinpath(top, target)) do
+        if file:sub(1, #name + 1) == name .. "." then
+          found[#found + 1] = vim.fs.joinpath(top, target, file)
+        end
+      end
+    end
+  end
+  return found
+end
+
+-- :Manuscript clean [part|name|all]: what the builds left: .build/ (all of it, with the labels of
+-- the whole; a part's folder; or one build's files), and what builds made before .build/ existed
+-- left beside the root. The PDFs stay.
 function M.clean(args, quiet)
   args = args or {}
   local ok, project = pcall(project_.find)
@@ -349,6 +418,8 @@ function M.clean(args, quiet)
       names = { #project.parts > 1 and part.name or whole }
     elseif vim.tbl_contains(other_builds(project, usual), args[1]) then
       names = { args[1] }
+    elseif #built_as(project, args[1]) > 0 then
+      names = {}
     else
       return vim.notify("[manuscript] No part or build " .. args[1], vim.log.levels.ERROR)
     end
@@ -368,11 +439,37 @@ function M.clean(args, quiet)
       vim.system(vim.list_extend({ "latexmk", "-c" }, tex), { cwd = project.dir }):wait()
       cleaned[#cleaned + 1] = name .. ".*"
     end
-    remove(name .. ".synctex.gz") -- (latexmk -c leaves it)
-    remove(name .. "-tikzDictionary")
+    local cached = vim.fs.joinpath(require("manuscript.export").cache(project, "build"), name) -- (a .tex part's)
+    if vim.uv.fs_stat(cached) then
+      vim.fn.delete(cached, "rf")
+      cleaned[#cleaned + 1] = name .. ".* (in the cache)"
+    end
+    for _, ext in ipairs({ ".synctex.gz", "-tikzDictionary", ".nav", ".snm", ".vrb", ".bbl", ".run.xml", "-blx.bib" }) do
+      remove(name .. ext) -- (what latexmk -c leaves: SyncTeX's, beamer's, biblatex's...)
+    end
+  end
+  local top = vim.fs.joinpath(project.dir, ".build")
+  if not args[1] or args[1] == "all" then
+    if vim.uv.fs_stat(top) then
+      vim.fn.delete(top, "rf")
+      cleaned[#cleaned + 1] = ".build/"
+    end
+  else
+    local part = vim.iter(project.parts):find(function(p) return p.name == args[1] end)
+    local folder = vim.fs.joinpath(top, part and #project.parts > 1 and part.name or whole)
+    if part and vim.uv.fs_stat(folder) then
+      vim.fn.delete(folder, "rf")
+      cleaned[#cleaned + 1] = ".build/" .. vim.fs.basename(folder) .. "/"
+    elseif not part then
+      for _, file in ipairs(built_as(project, args[1])) do
+        os.remove(file)
+        cleaned[#cleaned + 1] = file:sub(#project.dir + 2)
+      end
+    end
   end
   if not args[1] or args[1] == "all" then
     remove(whole .. "-labels.aux") -- (the next part's build makes the whole first)
+    vim.list_extend(cleaned, require("manuscript.figures").clean(project))
   end
   if not quiet then
     vim.notify("[manuscript] " .. (#cleaned > 0 and "Cleaned: " .. table.concat(cleaned, ", ") or "Nothing to clean"))

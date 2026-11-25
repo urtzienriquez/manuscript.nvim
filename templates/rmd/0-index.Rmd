@@ -1,0 +1,18 @@
+---
+documentclass: article
+classoption: 12pt
+preamble: 00_preamble.tex
+bibliography: references.bib
+---
+
+```{r setup, include=FALSE}
+library(knitrmini)
+opts_chunk$set(cache = 2, echo = FALSE, message = FALSE, warning = FALSE,
+               fig.width = 6, fig.height = 4, fig.align = "center", fig.pos = "!htb")
+```
+
+```{r child="1-main.Rmd"}
+```
+
+```{r child="2-appendix1.Rmd"}
+```

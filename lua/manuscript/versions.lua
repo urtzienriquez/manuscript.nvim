@@ -1,4 +1,4 @@
--- :Manuscript versions: the exports, and the names a version can have (for completion).
+-- :Manuscript versions: the exports and submissions, and the names a version can have (for completion).
 local M = {}
 
 function M.show()
@@ -8,7 +8,7 @@ function M.show()
   end
   local list = require("manuscript.snapshot").list(project)
   if #list == 0 then
-    return vim.notify("[manuscript] No export yet: :Manuscript export")
+    return vim.notify("[manuscript] No export or submission yet: :Manuscript export, :Manuscript submit")
   end
   local lines = {}
   for k, s in ipairs(list) do
@@ -16,7 +16,7 @@ function M.show()
     lines[#lines + 1] = ("@%d  %s  %s  %s%s"):format(k, s.name, (m.date or ""):gsub("T", " "),
       m.commit and m.commit:sub(1, 7) or "(no commit)", m.dirty and " + changes not committed" or "")
   end
-  vim.notify("[manuscript] Exports (for :Manuscript diff @N):\n" .. table.concat(lines, "\n"))
+  vim.notify("[manuscript] Exports and submissions (for :Manuscript diff @N, or @name):\n" .. table.concat(lines, "\n"))
 end
 
 -- The parts (main, appendix1...), @1, @2026-10-23..., ".", and the git tags, branches and recent
