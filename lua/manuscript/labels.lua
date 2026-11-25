@@ -81,6 +81,55 @@ function M.write_snapshot(project, aux)
   end
 end
 
+-- What a part refers to outside itself, in its sources (`texts`, comments out): whether it does
+-- (a \ref, \eqref... to a label it doesn't define: \label{}, or a chunk's fig:/tab:<label>), and
+-- whether by page (\pageref).
+function M.refers_outside(texts)
+  local strip = require("manuscript.latex").strip_comments
+  local defined, refs, pages = {}, {}, false
+  for _, text in ipairs(texts) do
+    text = strip(text)
+    for label in text:gmatch("\\label%s*{([^}]+)}") do
+      defined[label] = true
+    end
+    for chunk in text:gmatch("<<%s*([^,>=%s]+)") do -- (a chunk's figure and table: fig:<label>, tab:<label>)
+      defined["fig:" .. chunk], defined["tab:" .. chunk] = true, true
+    end
+    for chunk in text:gmatch("```+%s*{%a+%s+([^,}=%s]+)") do
+      defined["fig:" .. chunk], defined["tab:" .. chunk] = true, true
+    end
+    for cmd, list in text:gmatch("\\(%a*ref)%*?%s*{([^}]+)}") do
+      if cmd:match("ref$") then
+        pages = pages or cmd == "pageref"
+        for label in list:gmatch("[^,%s]+") do
+          refs[#refs + 1] = label
+        end
+      end
+    end
+  end
+  local outside = vim.tbl_filter(function(l) return not defined[l] end, refs)
+  return #outside > 0, pages
+end
+
+-- Whether the labels a part's references can point to (`before` and `after`: M.read's, of the
+-- whole; `own`: those the part defines) changed: their numbers, or (pages) their pages.
+function M.changed(before, after, own, pages)
+  for label, a in pairs(after) do
+    if not own[label] then
+      local b = before[label]
+      if not b or b.num ~= a.num or (pages and b.page ~= a.page) then
+        return true
+      end
+    end
+  end
+  for label in pairs(before) do
+    if not own[label] and not after[label] then
+      return true
+    end
+  end
+  return false
+end
+
 -- Resolves them in a file, with the labels of the whole's build (`aux`).
 function M.resolve_file(path, aux)
   if not vim.uv.fs_stat(aux) then

@@ -16,6 +16,8 @@ M.config = {
   -- a .jnw with Knit.jl; an .Rmd with rmarkdown if its YAML header names an output format, else
   -- knitrmini; an .Rnw with knitrmini if installed, else knitr
   julia = { "julia" }, -- the command of the Julia worker that knits .jnw files (Knit.jl must be installed)
+  check_numbers = true, -- after a part's build, the whole again in the background, and the part once
+  -- more if the numbers of its references to the others changed (see build.check_numbers)
   r_worker = true, -- knitrmini in an R kept running (R and the packages a document loads, started
   -- once); false: a new R for each knit
   latex = "lualatex", -- the LaTeX engine for PDFs (builds, diffs): "lualatex", "pdflatex", "xelatex"

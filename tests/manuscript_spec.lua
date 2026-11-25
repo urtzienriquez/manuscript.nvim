@@ -959,9 +959,11 @@ describe("a build", function()
     end
     local before = snapshot_time()
     vim.wait(20)
+    write(dir .. "/.manuscript.lua", "return { check_numbers = false }") -- (the rule before the build alone)
     write(dir .. "/2_main.Rnw", "% !TeX root = 1_index.Rnw\n\\section{Main}\nSee Section~\\ref{sec:app}: \\Sexpr{6 * 7}!\n")
     assert.is_true(make(), why())
     assert.equals(before, snapshot_time())
+    os.remove(dir .. "/.manuscript.lua")
     vim.wait(20)
     write(dir .. "/3_appendix1.Rnw", "\\section{First}\n\\section{Appendix}\\label{sec:app}\nOnly in the appendix.\n")
     assert.is_true(make(), why())
@@ -1361,5 +1363,53 @@ describe("LaTeX's errors, in the sources", function()
     local got = place(log, tex, { ["main.Rnw"] = "Text before it.\n\\begin{itemize}\n<<plot>>=\nplot(1)\n@\n", ["pre.tex"] = "\\begin{center}\n" })
     assert.same({ "x.tex", 4 }, { got[1][1], got[1][2] }) -- (knitr's figure: in no source)
     assert.same({ "main.Rnw", 2 }, { got[2][1], got[2][2] })
+  end)
+end)
+
+describe("the numbers of a part's references", function()
+  local build = require("manuscript.build")
+  local function make(args)
+    messages = {}
+    return run(function(done) build.run(args or {}, done) end)
+  end
+  local function text_of(pdf)
+    return vim.system({ "pdftotext", pdf, "-" }, { text = true }):wait().stdout or ""
+  end
+
+  it("are checked after the part's build: a counter running on into another part, fixed at once", function()
+    if not job.has("latexmk") or not job.has("pdflatex") or not job.has("pdftotext") then
+      return pending("needs latexmk, pdflatex and pdftotext")
+    end
+    local dir = vim.fn.tempname()
+    -- (a .tex paper: its own text is the part "main", the appendix an \include; equations run on)
+    local root = table.concat({ "\\documentclass{article}", "\\begin{document}",
+      "See Equation~\\ref{eq:app}.", "\\include{appendix1}", "\\end{document}", "" }, "\n")
+    write(dir .. "/paper.tex", root)
+    write(dir .. "/appendix1.tex", "\\section{Appendix}\n\\begin{equation}b\\label{eq:app}\\end{equation}\n")
+    write(dir .. "/.manuscript.lua", 'return { latex = "pdflatex" }')
+    vim.cmd.edit(dir .. "/paper.tex")
+    assert.is_true(make({ "main" }), why())
+    assert.truthy(text_of(dir .. "/main.pdf"):find("See Equation 1.", 1, true))
+    -- an equation of its own before: the appendix's is 2 now, which no file's date tells
+    vim.wait(20)
+    write(dir .. "/paper.tex", root:gsub("See Equation", "\\begin{equation}a\\end{equation}\nSee Equation"))
+    assert.is_true(make({ "main" }), why())
+    local main = text_of(dir .. "/main.pdf")
+    assert.truthy(main:find("See Equation 2.", 1, true), main)
+    -- built again unchanged: the same numbers
+    assert.is_true(make({ "main" }), why())
+    assert.truthy(text_of(dir .. "/main.pdf"):find("See Equation 2.", 1, true))
+  end)
+
+  it("are not checked for a part that refers to nothing outside itself", function()
+    local labels = require("manuscript.labels")
+    assert.is_false((labels.refers_outside({ "\\label{a} See \\ref{a}; <<fig1, fig.cap='x'>>= @ \\ref{fig:fig1}" })))
+    assert.is_true((labels.refers_outside({ "See \\ref{tab:data}." })))
+    local own = { mine = true }
+    local before = { mine = { num = "1", page = "1" }, other = { num = "2", page = "5" } }
+    assert.is_false(labels.changed(before, { mine = { num = "9", page = "1" }, other = { num = "2", page = "5" } }, own, false))
+    assert.is_true(labels.changed(before, { mine = { num = "1", page = "1" }, other = { num = "3", page = "5" } }, own, false))
+    assert.is_false(labels.changed(before, { mine = { num = "1", page = "1" }, other = { num = "2", page = "6" } }, own, false))
+    assert.is_true(labels.changed(before, { mine = { num = "1", page = "1" }, other = { num = "2", page = "6" } }, own, true))
   end)
 end)

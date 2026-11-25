@@ -313,18 +313,24 @@ end
 -- `all`. A manuscript of several parts is first built whole (so that each part's references to
 -- the others get their numbers: knitrmini's label snapshot, or the whole's .aux), unless its last
 -- build is newer than its sources; then knitted part by part.
-function M.parts(project, dir)
+function M.parts(project, dir, built) -- (built: the whole was just built, by the caller)
   local out = {}
   local several = #project.parts > 1
   local ok, err = pcall(function()
     out.all = vim.fs.joinpath(dir, "all.tex")
-    -- (the labels of the whole, for the numbers of each part's references to the others)
+    -- (the labels of the whole, for the numbers of each part's references to the others: built
+    -- now, every time, whatever the dates say: what goes out has today's numbers)
     local snapshot = require("manuscript.labels").snapshot(project)
-    if several and not M.fresh(project, snapshot) then
+    local fresh = false
+    if several and built then
+      fresh = vim.uv.fs_stat(snapshot) ~= nil
+    elseif several then
+      local started = os.time()
       job.range(0, 60)
       require("manuscript.build").make(project, { label = "building the whole (for the numbers of references)" })
+      local st = vim.uv.fs_stat(snapshot) -- (written, if the whole had no LaTeX errors)
+      fresh = st ~= nil and st.mtime.sec >= started
     end
-    local fresh = several and M.fresh(project, snapshot)
     local how = knitter(project)
     if how == "knitrmini" or how == "knit.jl" or how == "knitr" then
       job.range(60, 80)

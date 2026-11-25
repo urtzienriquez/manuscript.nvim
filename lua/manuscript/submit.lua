@@ -439,7 +439,7 @@ function M.run(args, on_done)
       -- 1. the main text (or the whole), built with the variant
       local several = #project.parts > 1 and settings.appendices ~= "inline"
       local main = several and (vim.iter(project.parts):find(function(p) return p.name == "main" end) or project.parts[1]) or nil
-      if main and not build.has_labels(project, main) then
+      if several then -- (the whole first, every time: what is submitted has today's numbers)
         job.range(0, 15)
         build.make(project, { label = "the whole first (for the numbers of references)" })
       end
@@ -577,7 +577,7 @@ function M.run(args, on_done)
       end
       job.range(88, 100)
       job.say("recording it (for diffs)")
-      local texs = knit.parts(project, require("manuscript.export").cache(project, "submit"))
+      local texs = knit.parts(project, require("manuscript.export").cache(project, "submit"), several)
       require("manuscript.snapshot").record(project, folder, texs, {}, { kind = "submission", variant = name, anonymous = anonymous })
 
       local real = vim.tbl_filter(function(i) return not i.cited end, leaks)

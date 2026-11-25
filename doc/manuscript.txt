@@ -121,11 +121,23 @@ What knits each kind (the option `knit` chooses another):
            environment, else your default one, where Knit.jl must be).
   .tex     latexmk.
 
-A text edit rebuilds in a LaTeX pass and a second of knitting. A build of
-the whole keeps the labels of all the parts (.build/<root>-labels.aux), with
-which a part's references to the others get their numbers; a part built
-before any build of the whole makes one first. An export reuses it too, when
-it's newer than the sources.
+A text edit rebuilds in a LaTeX pass and a second of knitting.
+
+                                                          *manuscript-numbers*
+A part built alone numbers its references to the other parts ("Table S1.1",
+"Appendix 1") with the labels of the last build of the whole
+(.build/<root>-labels.aux). They are always today's:
+- before the part's build, the whole is built first if there is no build of
+  it yet, or if a file outside the part changed since (the root, the
+  preamble, another part: their numbers may have moved);
+- after it, with its PDF there already, the whole is built again in the
+  background, and if the labels the part can point to changed (a counter
+  running on from it into another part, a chunk making one more table now
+  that the data changed, pages for its \pageref), the part is built once
+  more: the viewer reloads it. Not for a part that refers to nothing outside
+  itself; given up when you ask for another build, which checks in its turn.
+  `check_numbers = false`: not done.
+An export and a submission build the whole first, every time.
 
 The PDF opens the first time (with |vim.ui.open()|); viewers such as zathura
 or sioyek reload it by themselves after that. LaTeX's errors go to the
@@ -528,6 +540,7 @@ No setup() is needed. These are the defaults: >lua
     identity = nil,          -- more words an anonymous submission must not
                              -- have (who you are)
     variants = {},           -- your variants (|manuscript-variants|)
+    check_numbers = true,    -- after a part's build (|manuscript-numbers|)
     archive = nil,           -- { include = {...}, exclude = {...} }
                              -- (|manuscript-archive|)
   })

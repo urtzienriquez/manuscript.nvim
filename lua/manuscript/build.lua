@@ -379,12 +379,10 @@ M.make = make
 -- date for building `part`: the whole was built since any file outside that part changed (the root,
 -- the preamble, another part: their numbering). Edits to the part itself don't matter: building it
 -- doesn't make the whole again. Without `part`: whether the whole was built at all.
-function M.has_labels(project, part)
-  local st = vim.uv.fs_stat(require("manuscript.labels").snapshot(project))
-  if not st or not part then
-    return st ~= nil
-  end
-  local others, own = {}, {} -- (a part's files: but those of the other parts, as a .tex root's own part has them)
+-- A part's files: its file and what it includes, but those of the other parts (a .tex root's own
+-- part includes them). { [file] = true }
+function M.own_files(project, part)
+  local others, own = {}, {}
   for _, p in ipairs(project.parts) do
     if p ~= part then
       others[p.file] = true
@@ -396,6 +394,15 @@ function M.has_labels(project, part)
   for _, f in ipairs(vim.list_extend({ part.file }, project_.files(part.file, project.dir))) do
     own[f] = not others[f] or nil
   end
+  return own
+end
+
+function M.has_labels(project, part)
+  local st = vim.uv.fs_stat(require("manuscript.labels").snapshot(project))
+  if not st or not part then
+    return st ~= nil
+  end
+  local own = M.own_files(project, part)
   for _, f in ipairs(project.files) do
     local fs = not own[f] and vim.uv.fs_stat(f)
     if fs and (fs.mtime.sec > st.mtime.sec or fs.mtime.sec == st.mtime.sec and fs.mtime.nsec > st.mtime.nsec) then
@@ -463,9 +470,11 @@ function M.run(args, on_done)
     end
     job.title("build " .. name)
     require("manuscript.figures").update(project)
+    local whole_first = false -- (the whole built just now: its numbers are today's)
     local ok, made = pcall(function()
       if part and not M.has_labels(project, part) then
         make(project, { label = "the whole first (for the numbers of references)" })
+        whole_first = true
       end
       return make(project, { part = part, job = name, variant = variant })
     end)
@@ -487,6 +496,9 @@ function M.run(args, on_done)
       opened[pdf] = true
       vim.schedule(function() vim.ui.open(pdf) end)
     end
+    if part and not whole_first and project.options.check_numbers ~= false then
+      M.check_numbers(project, part, name, variant, pdf)
+    end
   end, function(ok)
     running = false
     if on_done then
@@ -499,6 +511,41 @@ function M.run(args, on_done)
       vim.api.nvim_buf_call(buf and buf > 0 and buf or 0, function() M.run(next_args, next_done) end)
     end
   end, "build")
+end
+
+-- After a part's build, with the PDF there already: the numbers of its references to the other
+-- parts, checked. The whole is built again (what no file's date can tell: a counter running on
+-- from this part into the next, a chunk making one more table now that the data changed, the pages
+-- of \pageref), and if the labels it can point to changed, the part is built once more (the
+-- viewer reloads it). Not for a part that refers to nothing outside itself; given up, between its
+-- steps, when another build is asked for (which checks them in its turn).
+function M.check_numbers(project, part, name, variant, pdf)
+  local labels = require("manuscript.labels")
+  local texts = {}
+  for f in pairs(M.own_files(project, part)) do
+    texts[#texts + 1] = project_.read(f) or ""
+  end
+  local outside, pages = labels.refers_outside(texts)
+  if not outside or again then
+    return
+  end
+  local snapshot = labels.snapshot(project)
+  local before = labels.read(snapshot)
+  job.say(vim.fn.fnamemodify(pdf, ":~:.") .. " ready; checking the numbers of its references")
+  local ok = pcall(make, project, { label = vim.fn.fnamemodify(pdf, ":t") .. " ready; checking the numbers of its references" })
+  knit.clean(project.dir)
+  if not ok or again then
+    return job.say(vim.fn.fnamemodify(pdf, ":~:.") .. " ready")
+  end
+  local own = labels.read(vim.fs.joinpath(project.dir, ".build", part.name, name .. ".aux"))
+  if not labels.changed(before, labels.read(snapshot), own, pages) then
+    return job.say(vim.fn.fnamemodify(pdf, ":~:.") .. " ready (numbers checked)")
+  end
+  local made = make(project, { part = part, job = name, variant = variant, label = "the numbers of its references changed" })
+  local found = M.in_sources(M.errors(made.log, made.tex), project)
+  knit.clean(project.dir)
+  M.show(found, "manuscript build: " .. name)
+  job.say(vim.fn.fnamemodify(pdf, ":~:.") .. " built again: the numbers of its references had changed")
 end
 
 -- :Manuscript build watch: build when a file of the manuscript is written (again: off).

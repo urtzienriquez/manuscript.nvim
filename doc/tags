@@ -10,6 +10,7 @@ manuscript-knit	manuscript.txt	/*manuscript-knit*
 manuscript-merge	manuscript.txt	/*manuscript-merge*
 manuscript-merge-sent	manuscript.txt	/*manuscript-merge-sent*
 manuscript-new	manuscript.txt	/*manuscript-new*
+manuscript-numbers	manuscript.txt	/*manuscript-numbers*
 manuscript-options	manuscript.txt	/*manuscript-options*
 manuscript-progress	manuscript.txt	/*manuscript-progress*
 manuscript-project	manuscript.txt	/*manuscript-project*
