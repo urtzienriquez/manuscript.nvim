@@ -109,7 +109,7 @@ end
 -- Fails on an error.
 function M.knit(project, input, output, compile, engine, on_line, lang)
   lang = lang or "julia"
-  job.need(lang == "r" and "Rscript" or "julia", "to knit " .. vim.fs.basename(input))
+  job.need(command(project, lang)[1], "to knit " .. vim.fs.basename(input)) -- (the program it runs: the option's)
   local w = workers[lang .. ":" .. project.dir] or start(project, lang)
   local co = coroutine.running()
   send(w, {
