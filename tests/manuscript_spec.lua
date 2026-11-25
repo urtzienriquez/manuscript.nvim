@@ -375,6 +375,9 @@ describe("the tracked-changes PDF", function()
     local pdf = dir .. "/diff/old-vs-now.pdf"
     local kept = dir .. "/.build/diff"
     assert.truthy(vim.uv.fs_stat(kept .. "/old-vs-now.aux"))
+    -- (once more first: latexmk may run LaTeX again when its last run and a file it read share a
+    -- second; then it has settled)
+    check({ old }, "old-vs-now")
     local before = read(kept .. "/old-vs-now.log")
     check({ old }, "old-vs-now")
     assert.equal(before, read(kept .. "/old-vs-now.log")) -- (no LaTeX run)
