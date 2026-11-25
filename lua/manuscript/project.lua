@@ -34,7 +34,12 @@ function M.root(path)
     for line in text:gmatch("[^\n]*") do
       local named = line:match("^%%%s*!%a+%s*root%s*=%s*(%S+)")
       if named then
-        return vim.fs.normalize(vim.fs.joinpath(dir, named))
+        local root = vim.fs.normalize(vim.fs.joinpath(dir, named))
+        if not vim.uv.fs_stat(root) then
+          return nil, ("%s says its root is %s (%% !TeX root), but there's no %s in %s"):format(
+            vim.fs.basename(path), named, named, vim.fn.fnamemodify(vim.fs.dirname(root), ":~"))
+        end
+        return root
       end
       n = n + 1
       if n > 10 then
