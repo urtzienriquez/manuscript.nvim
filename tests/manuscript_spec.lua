@@ -1215,7 +1215,7 @@ describe("a new manuscript", function()
       local root = project_.root(dir)
       assert.truthy(root, kind)
       assert.equals(root, vim.api.nvim_buf_get_name(0)) -- (opened)
-      for _, file in ipairs({ "00_preamble.tex", "01_authors.tex", "title_page.tex" }) do
+      for _, file in ipairs({ "00_preamble.tex", "01_metadata.tex", "title_page.tex" }) do
         local expected = file == "title_page.tex" and dir .. "/title_page.tex" or root
         assert.equals(expected, project_.root(dir .. "/" .. file), kind .. ": " .. file)
       end

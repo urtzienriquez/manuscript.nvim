@@ -306,8 +306,9 @@ of its references to the others). A git branch with a part's name is
 <Tab> completes the parts, variants, exports, submissions, tags, branches
 and recent commits. A citation key renamed since (the same DOI, or title
 and year, in the old and new .bib) is renamed in the old version, so that it
-doesn't show as a change; `oldkey=newkey` arguments add to them. The PDF is built with lua-ul when it
-is installed (ulem stops hyphenation), and some room to stretch lines.
+doesn't show as a change; `oldkey=newkey` arguments add to them. The PDF is
+built with lua-ul when it is installed (ulem stops hyphenation), and some
+room to stretch lines.
 
 ==============================================================================
 VARIANTS                                                 *manuscript-variants*
@@ -441,11 +442,11 @@ NEW                                                           *manuscript-new*
 root. The plugin's templates, one per kind (rnw, rmd, tex, jnw), are a paper
 of a main text and an appendix (its own title block, references and
 numbering), with the switches of |manuscript-variants| in the preamble
-(the authors in 01_authors.tex, in `\ifanonymous\else ... \fi`; line numbers,
-double spacing, figures at the end), a title page and a cover letter for
-|manuscript-submit|, an empty references.bib and a .manuscript.lua for its
-variants. Your own: the folders of the option `templates` (they win by
-name). <Tab> completes them.
+(the title and authors in 01_metadata.tex, the authors in `\ifanonymous`;
+line numbers, double spacing, figures at the end), a title page and a cover
+letter for |manuscript-submit| (documents of their own: no number), an empty
+references.bib and a .manuscript.lua for its variants. Your own: the folders
+of the option `templates` (they win by name). <Tab> completes them.
 
 ==============================================================================
 COMMANDS                                                         *:Manuscript*
