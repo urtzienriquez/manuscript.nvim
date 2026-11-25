@@ -196,7 +196,8 @@ local function knit(project, name, part_file, out, compile, text, on_line)
   else
     expr = ("knitr::knit(%q, output = %q, quiet = %s)"):format(copy, out, quiet)
   end
-  local r = job.run({ "Rscript", "-e", expr }, { cwd = project.dir, line = on_line })
+  local r = job.run({ "Rscript", "-e", expr }, { cwd = project.dir, line = on_line,
+    env = { KNITRMINI_FIG_PATH = require("manuscript.worker").FIG_PATH } }) -- (chunks' figures: in .build/)
   local made = vim.uv.fs_stat(vim.fs.joinpath(project.dir, out)) or vim.uv.fs_stat(out)
   if not made or (r.code ~= 0 and not (r.stderr or ""):find("PDF not produced", 1, true)) then
     job.fail(("knitting %s failed:\n%s"):format(name, job.tail(r)))

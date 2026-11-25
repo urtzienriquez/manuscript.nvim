@@ -10,6 +10,9 @@
 local job = require("manuscript.job")
 local M = {}
 
+-- Where knitrmini puts chunks' figures by default (relative to the document): out of its folder.
+M.FIG_PATH = ".build/figure/"
+
 local workers = {} -- [lang .. ":" .. dir] = { process, request = { line, on_line, done }, rest, stderr }
 
 local function command(project, lang)
@@ -64,6 +67,7 @@ function start(project, lang)
   end
   w.process = vim.system(command(project, lang), {
     cwd = project.dir,
+    env = lang == "r" and { KNITRMINI_FIG_PATH = M.FIG_PATH } or nil,
     stdin = true,
     text = true,
     stdout = function(_, data)

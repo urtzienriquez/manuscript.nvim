@@ -43,11 +43,13 @@ end
 
 -- The comments of a decision letter: { { reviewer, points = { { id, text } } } }. A reviewer starts
 -- at a line naming one; a point at a line numbered as reviewers do (1., 2), (3), Comment 4, R1.5, a
--- bullet) or, if none is, at each paragraph. Points without a number get one, in order.
+-- bullet) or, if none is, at each paragraph. Points without a number get one, in order. What comes
+-- before the first reviewer, unnumbered, is the letter ("Dear Dr ..."), not a comment: left out.
 function M.split(text)
-  local any = false
+  local any, headed = false, false
   for line in (text .. "\n"):gmatch("([^\n]*)\n") do
     any = any or numbered(line) ~= nil
+    headed = headed or reviewer(line) ~= nil
   end
   local out, current, point = {}, nil, nil
   local function add(id, first)
@@ -72,6 +74,7 @@ function M.split(text)
       end
     elseif any and id then
       add(id, rest)
+    elseif headed and not current then -- (the letter, before the first reviewer)
     elseif point then
       point.text = point.text .. (point.text:match("\n$") and "" or " ") .. vim.trim(line)
     else
