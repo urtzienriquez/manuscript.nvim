@@ -26,12 +26,12 @@ jobs:
           neovim: true
           version: ${{ matrix.neovim }}
 
-      # pandoc for the exports; latexdiff and a small TeX for the tracked-changes PDF (the tests
-      # that need R are skipped without it)
+      # pandoc for the exports; latexdiff and a small TeX for the builds and the tracked-changes PDF
+      # (texlive-science: siunitx, in the test document; the tests that need R are skipped without it)
       - name: Install pandoc, latexdiff and TeX
         run: |
           sudo apt-get update
-          sudo apt-get install -y pandoc latexdiff latexmk texlive-latex-recommended texlive-latex-extra poppler-utils
+          sudo apt-get install -y pandoc latexdiff latexmk texlive-latex-recommended texlive-latex-extra texlive-science poppler-utils
 
       - name: Install plenary.nvim and neoffice.nvim
         run: |

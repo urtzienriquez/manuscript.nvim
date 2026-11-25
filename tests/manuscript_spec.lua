@@ -11,6 +11,15 @@ local messages = {}
 vim.notify = function(m) messages[#messages + 1] = m end
 vim.ui.open = function() end
 
+-- Why a task failed: its messages, and LaTeX's errors (in the quickfix list).
+local function why()
+  local out = vim.tbl_map(tostring, messages)
+  for _, item in ipairs(vim.fn.getqflist()) do
+    out[#out + 1] = item.text
+  end
+  return table.concat(out, "\n")
+end
+
 local function write(path, text)
   vim.fn.mkdir(vim.fs.dirname(path), "p")
   local f = assert(io.open(path, "w"))
@@ -235,7 +244,7 @@ describe("the tracked-changes PDF", function()
     write(dir .. "/refs.bib", BIB:gsub("jones2019", "jones2019b"))
     local function check(args, name)
       messages = {}
-      assert.is_true(run(function(done) require("manuscript.diff").run(args, done) end))
+      assert.is_true(run(function(done) require("manuscript.diff").run(args, done) end), why())
       local pdf = dir .. "/diff/" .. name .. ".pdf"
       assert.truthy(vim.uv.fs_stat(pdf), name .. ": " .. table.concat(vim.tbl_map(tostring, messages), "\n"))
       local tex = read(vim.fs.joinpath(require("manuscript.export").cache(project_.find(path), "diff"), "diff.tex"))
@@ -398,6 +407,7 @@ end)
 describe("a build", function()
   local build = require("manuscript.build")
   local function make(args)
+    messages = {}
     return run(function(done) build.run(args or {}, done) end)
   end
 
@@ -409,7 +419,7 @@ describe("a build", function()
     local dir = vim.fs.dirname(path)
     write(dir .. "/.manuscript.lua", 'return { latex = "pdflatex" }')
     vim.cmd.edit(path)
-    assert.is_true(make())
+    assert.is_true(make(), why())
     assert.truthy(vim.uv.fs_stat(dir .. "/paper.pdf"))
     write(path, TEX:gsub("The second paragraph", "The \\nocommand paragraph"))
     assert.is_false(make())
