@@ -1,0 +1,12 @@
+:Manuscript	manuscript.txt	/*:Manuscript*
+manuscript	manuscript.txt	/*manuscript*
+manuscript-build	manuscript.txt	/*manuscript-build*
+manuscript-diff	manuscript.txt	/*manuscript-diff*
+manuscript-export	manuscript.txt	/*manuscript-export*
+manuscript-keymaps	manuscript.txt	/*manuscript-keymaps*
+manuscript-merge	manuscript.txt	/*manuscript-merge*
+manuscript-merge-sent	manuscript.txt	/*manuscript-merge-sent*
+manuscript-options	manuscript.txt	/*manuscript-options*
+manuscript-progress	manuscript.txt	/*manuscript-progress*
+manuscript-project	manuscript.txt	/*manuscript-project*
+manuscript.txt	manuscript.txt	/*manuscript.txt*

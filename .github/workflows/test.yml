@@ -1,0 +1,49 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Neovim ${{ matrix.neovim }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        neovim:
+          - stable
+          - nightly
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+          version: ${{ matrix.neovim }}
+
+      # pandoc for the exports; latexdiff and a small TeX for the tracked-changes PDF (the tests
+      # that need R are skipped without it)
+      - name: Install pandoc, latexdiff and TeX
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pandoc latexdiff latexmk texlive-latex-recommended texlive-latex-extra poppler-utils
+
+      - name: Install plenary.nvim and neoffice.nvim
+        run: |
+          git clone --depth 1 https://github.com/nvim-lua/plenary.nvim /tmp/plenary.nvim
+          git clone --depth 1 https://github.com/urtzienriquez/neoffice.nvim /tmp/neoffice.nvim
+
+      - name: Run tests
+        env:
+          PLENARY_DIR: /tmp/plenary.nvim
+          NEOFFICE_DIR: /tmp/neoffice.nvim
+        run: |
+          git config --global user.email "ci@example.com"
+          git config --global user.name "CI"
+          nvim --headless -u tests/minimal_init.lua \
+            -c "PlenaryBustedDirectory tests {minimal_init='tests/minimal_init.lua', sequential=true}"

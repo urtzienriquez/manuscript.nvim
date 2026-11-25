@@ -1,0 +1,306 @@
+*manuscript.txt*  A LaTeX or Rnoweb manuscript's round trip with Word
+
+Author:  Urtzi Enriquez-Urzelai
+License: GPL-3.0
+
+==============================================================================
+INTRODUCTION                                                      *manuscript*
+
+manuscript.nvim takes a manuscript written in LaTeX or Rnoweb (knitr's .Rnw)
+through a review with collaborators who use Word, and back:
+
+  0. |:Manuscript| build      while you write: the PDF of the part you are in,
+                              or of the whole, in the background
+  1. |:Manuscript| export     Word files, one per part, in export/<date>/
+  2. review                   rounds of edits and comments, in Word or in
+                              neoffice.nvim: accept, reject, comment, send
+                              back... as you like
+  3. |:Manuscript| merge      open the last Word file, wherever it is, and
+                              bring its edits into your sources, in a diff
+  4. |:Manuscript| diff       a PDF with the changes since what you sent, as
+                              tracked changes (for a journal's resubmission)
+
+It defines one command, |:Manuscript|, and no keymaps (see
+|manuscript-keymaps|). Nothing is written in your manuscript's folder but
+export/ and diff/, which keep themselves out of git.
+
+                                                         *manuscript-progress*
+Builds, exports and diffs run in the background, each with one message
+updated in place: its step (knitting, and which chunk; LaTeX...), the time
+since it began, how far it is (from its steps, or estimated from how long
+the same build took before), and at the end, done or failed. In Nvim 0.12+
+these are |progress-message|s: shown by the |ui2| message window, a plugin
+such as fidget, the terminal (as a progress bar, if it supports it), or the
+'statusline' with |vim.ui.progress_status()|; when done, also in |:messages|.
+Before 0.12, a notification per step.
+
+Requires Nvim 0.10+, neoffice.nvim (it reads Word files) and pandoc. For .Rnw
+files: R with knitrmini (or knitr). For |manuscript-diff|: latexdiff and
+latexmk.
+
+==============================================================================
+THE MANUSCRIPT                                            *manuscript-project*
+
+Its root is the file that is compiled: the one a `% !TeX root = ...` line of
+the current file names, the current file if it has `\begin{document}`, or the
+one such file in its folder (an .Rnw before a .tex: a .tex beside an .Rnw is
+its knitted output).
+
+An .Rnw root's parts are its child chunks, in order, each named after its
+file without a leading number: >
+
+  <<child='2_main.Rnw', eval=FALSE>>=          " the part "main"
+  <<child='3_appendix1.Rnw', eval=FALSE>>=     " the part "appendix1"
+<
+A .tex root is one part. The .bib files are those of its `\addbibresource{}`
+and `\bibliography{}` (or else those in its folder).
+
+==============================================================================
+BUILD                                                       *manuscript-build*
+
+:Manuscript build [{part}|all] [{name}.pdf] makes the PDF as you would by hand
+(`knitrmini::knit(root, output = ..., engine = "lualatex")`), in the
+background: you go on writing, and it says when it's ready.
+
+  :Manuscript build            the part of the file you are in (main.pdf from
+                               2_main.Rnw), or the whole if you are in the
+                               root (1_index.pdf)
+  :Manuscript build appendix1  that part
+  :Manuscript build all        the whole manuscript
+  :Manuscript build main main_v2.pdf
+                               that part, as main_v2.pdf (main.pdf stays as
+                               it was)
+
+With a {name}.pdf, the build is made under that name, beside the root:
+{name}.tex, {name}.pdf and latexmk's files; the usual PDF is left as it was.
+The first build of a name runs LaTeX from scratch; the next ones are as fast
+as the usual. A name only (no folder), and not another part's.
+
+A part is knitted from a copy of the root with only its child chunk
+evaluated: no more setting `eval=FALSE` by hand, nor naming the output. Its
+.tex and PDF are written beside the root, as <part>.tex and <part>.pdf, with
+latexmk's auxiliary files: the next build only reruns what it must (a text
+edit: a LaTeX pass and a second of knitting). A build of the whole keeps the
+labels of all the parts (<root>-labels.aux, knitrmini's snapshot), with which
+a part's references to the others get their numbers; a part built before any
+build of the whole makes one first. An export reuses it too, when it's newer
+than the sources.
+
+The PDF opens the first time (with |vim.ui.open()|); viewers such as zathura
+or sioyek reload it by themselves after that. LaTeX's errors go to the
+|quickfix| list, at their line in your sources when it can be found there
+(else in the .tex), and leave it when a build succeeds. A build asked for
+while another runs follows it (two at once would write the same files).
+
+:Manuscript build watch builds when a file of a manuscript (.Rnw, .tex, .bib)
+is written; again, it stops (`build_on_save = true` from the start).
+
+:Manuscript clean removes the auxiliary files of every build of the
+manuscript (the whole, each part, and those under other names: latexmk's
+files, the .synctex.gz) and the labels of the whole; :Manuscript clean {part}
+(or {name}), those of that build only. The knitted .tex and the PDF stay. (After a clean, the next build of a
+part builds the whole first.)
+
+==============================================================================
+EXPORT                                                     *manuscript-export*
+
+:Manuscript export makes a Word file of each part in a new folder of the
+manuscript's: `export/<date>/` (`<date>-2`, ... for another one that day).
+Each file is named after its part and the folder, `main_2026-11-25.docx`, so
+the versions you send don't overwrite each other at your collaborators'.
+For an .Rnw root, each part is knitted as you would by hand: a copy of the
+root with only that part's child chunk evaluated (your root isn't changed).
+First the whole manuscript is built, as `:Manuscript build all` does (so
+its PDF is brought up to date too), so that each part's references to the
+others (`\ref{fig:s1}` in the main text) get their numbers; not if your last
+build of the whole is newer than the sources.
+
+Then each part is converted as `toword` did: the LaTeX made readable by
+pandoc (siunitx, authblk, knitr's environments, appendices, ...), pandoc with
+citeproc, a citation style, a reference .docx for the styles, and filters for
+cross-references, appendices, titles, figures (PDF figures become PNG
+images) and tables; the author block aligned. The files made on the way stay
+in Nvim's cache. The Word files don't carry paths of your folders.
+
+Each export is a snapshot of what you sent: its folder also keeps, in
+`.manuscript/`, the LaTeX its Word files were made from and the git commit
+(and a copy of the sources if they had changes not committed). |:Manuscript|
+merge and diff use it.
+
+==============================================================================
+MERGE                                                       *manuscript-merge*
+
+In a Word or LibreOffice document (opened with neoffice.nvim), from any
+folder: >vim
+
+  :Manuscript merge                  " the manuscript found by itself
+  :Manuscript merge ~/papers/vipers/ " or this one (a file of it, its folder)
+<
+The manuscript is the one given, or else the one this document is from: of
+the current folder's and those you exported or merged into, the one that has
+most of its text, clearly; else it asks (with completion).
+
+Nothing is written. Each source file the document changes opens in a new tab,
+in a |diff| view: on the left what it would be with the document's edits,
+and your file on the right (as in vim-fugitive). In your file, take the ones
+you want with |do| (|]c| goes to the next one) and write it. The |quickfix|
+list has every edit ("change: old → new", "add:", "delete:"), the unresolved
+comments, and anything that needs your eyes, at their line in the source;
+its title says how many. It follows your file: an edit you take (or make
+yourself) leaves it a moment later. Its items open where their file is shown
+already (<CR>, |:cnext|...), so the diff stays as it is; those about
+paragraphs only the document has (the title page...) come last, and open the
+document in its tab. (While a merge tab is open, 'switchbuf' is
+"useopen,usetab,newtab"; yours again when it is closed.)
+
+Running it again is safe, and it reads your sources as they are in Nvim,
+with what you took and haven't written yet: what your source has already is
+left alone, and its tab shows only the rest. So you can fix the .bib, say,
+and run it again in the middle of a review.
+
+What the document was ~
+                                                       *manuscript-merge-sent*
+To tell the edits from what the export writes (citations, computed values,
+references...), the merge compares the document with the export it was made
+from: of the exports of |manuscript-export|, the one most like it. Without
+one (exported by other means), a .docx with no tracked changes in the
+sources' folder or below, like this document and the most like your sources,
+or a copy named `*.sent.docx` beside the document; or give it: >vim
+
+  :Manuscript merge ~/papers/vipers/ old/main.docx
+<
+With it, every edit of every round is found: tracked or not, accepted,
+rejected, yours or theirs, whole paragraphs added or deleted. Without it,
+the document's text as sent is its text with all tracked changes rejected,
+so only the edits still tracked are found (and it says so).
+
+If you change the sources and export again during a review, the new export
+no longer is what the document was made from: merge the review first.
+
+How it works ~
+Each paragraph of the document is paired with the paragraph of the sources
+with the most words in common (a short one, like a heading, only in the file
+of the paragraphs around it). Where the document and the export differ, the
+source changes, written as LaTeX: italics as `\emph{}`, bold as `\textbf{}`,
+special characters escaped. Your line wrapping, `%` comments and everything
+around the edits stay as they are.
+
+- A citation from which a reference was removed is rebuilt with the keys that
+  are left (`\parencite{a,b}` → `\parencite{a}`).
+- A citation typed in the document, like "(Smith & Lee, 2020; Kim et al.,
+  2021)", is looked up in the .bib files by first author, year and number of
+  authors. One it can't find, or can't tell apart, stays as text, and its
+  item in the quickfix list goes to it in the proposal: replace it there with
+  your citation picker (citeref.nvim, for example), then take it with |do|.
+  A reference missing from your library: add it (zotero.nvim, with Better
+  BibTeX keeping the .bib up to date) and merge again.
+- A computed value (`\Sexpr{}`), a reference, a unit or a formula edited in
+  the document is kept as it is, and listed. Deleted with the text around it,
+  it goes with it.
+- Unresolved comments are listed at their line in the source (resolved ones
+  were dealt with during the review).
+- If your source changed since the export, where the document changed it
+  too, your text is kept and the place is listed as a conflict.
+- A paragraph the document added goes after the one before it; one it deleted
+  is deleted; both are listed. Paragraphs not found in the sources (tables or
+  text written by R, the title page, the reference list) are listed when they
+  changed.
+
+==============================================================================
+DIFF                                                         *manuscript-diff*
+
+:Manuscript diff [{part}] [{old}] [{new}] [{oldkey}={newkey} ...] makes a PDF with the
+changes between two versions of the manuscript, marked as tracked changes
+(latexdiff), in `diff/<old>-vs-<new>.pdf`, and opens it (the first time:
+then your PDF viewer reloads it). Its LaTeX files are kept in Nvim's cache, so
+making the same diff again runs LaTeX only as much as needed. A version is:
+
+  (none), @              the last export: what you sent
+  @2, @2026-10-23        an export, by its place (@1 is the last; see
+                         :Manuscript versions) or its folder's name
+  HEAD, c2ffc81, v1      a git revision: the manuscript's files as they were
+                         then, knitted with today's data and code
+  path                   a .tex file (as it is), or an .Rnw/.tex root or its
+                         folder (knitted)
+  .                      the manuscript now (the default {new})
+
+With a part's name (main, appendix1...), only that part is compared:
+`:Manuscript diff main` gives `diff/main-<export>-vs-now.pdf`, the changes to
+the main text since what you sent; `:Manuscript diff appendix1 HEAD~2` those
+to the appendix since a revision. An export kept each part's LaTeX; the
+manuscript now and a git revision are knitted with only that part (as a
+build: without a build of the whole yet, one is made first, for the numbers
+of its references to the others). A git branch with a part's name is
+`heads/<name>` here.
+
+<Tab> completes the parts, exports, tags, branches and recent commits. A citation
+key renamed since (the same DOI, or title and year, in the old and new .bib)
+is renamed in the old version, so that it doesn't show as a change;
+`oldkey=newkey` arguments add to them. The PDF is built with lua-ul when it
+is installed (ulem stops hyphenation), and some room to stretch lines.
+
+==============================================================================
+COMMANDS                                                         *:Manuscript*
+
+:Manuscript build [{part}|all|watch] [{name}.pdf]
+                                The PDF of the current part, a part, or the
+                                whole; watch: on each write (|manuscript-build|).
+:Manuscript clean [{part}]      The auxiliary files of the builds (all, or
+                                a part's).
+:Manuscript export              Word files of the manuscript in export/<date>/
+                                (|manuscript-export|).
+:Manuscript merge [{manuscript}] [{export}]
+                                In a document: its edits into the sources, in
+                                a diff view (|manuscript-merge|).
+:Manuscript diff [{part}] [{old}] [{new}] [{oldkey}={newkey} ...]
+                                A PDF with the changes between two versions,
+                                of the whole or of a part (|manuscript-diff|).
+:Manuscript versions            The exports, for :Manuscript diff @N.
+
+Alone, it lets you pick one.
+
+==============================================================================
+KEYMAPS                                                   *manuscript-keymaps*
+
+manuscript.nvim sets no keymaps. For example: >lua
+
+  vim.keymap.set("n", "<leader>rr", "<Cmd>Manuscript build<CR>", { desc = "Build this part" })
+  vim.keymap.set("n", "<leader>rR", "<Cmd>Manuscript build all<CR>", { desc = "Build the whole" })
+  vim.keymap.set("n", "<leader>rc", "<Cmd>Manuscript clean<CR>", { desc = "Clean the build" })
+  vim.keymap.set("n", "<leader>me", "<Cmd>Manuscript export<CR>", { desc = "Export to Word" })
+  vim.keymap.set("n", "<leader>md", "<Cmd>Manuscript diff<CR>", { desc = "Changes since the last export" })
+  -- in documents (neoffice's filetype), next to its <leader>w keymaps
+  vim.api.nvim_create_autocmd("FileType", {
+    pattern = "neoffice",
+    callback = function(ev)
+      vim.keymap.set("n", "<leader>wm", "<Cmd>Manuscript merge<CR>", { buffer = ev.buf, desc = "Merge into the sources" })
+    end,
+  })
+<
+==============================================================================
+OPTIONS                                                   *manuscript-options*
+
+No setup() is needed. These are the defaults: >lua
+
+  require("manuscript").setup({
+    export_dir = "export",   -- where exports go, in the manuscript's folder
+    csl = nil,               -- the citation style: a .csl in the manuscript's
+                             -- folder, or the bundled one
+    reference_docx = nil,    -- the Word file whose styles exports use
+    move_figures = false,    -- figures at the end of each Word file
+    move_tables = false,     -- tables at the end
+    dpi = 200,               -- PDF figures become PNG at this resolution
+    knit = nil,              -- "knitrmini" or "knitr"; nil: knitrmini if
+                             -- installed
+    latex = "lualatex",      -- the LaTeX engine for PDFs: "lualatex",
+                             -- "pdflatex" or "xelatex"
+    build_on_save = false,   -- :Manuscript build on each write
+    latexdiff = { "--math-markup=whole" }, -- latexdiff's options
+  })
+<
+A manuscript can have its own: a `.manuscript.lua` in its folder that returns
+a table of the same keys (paths relative to the folder): >lua
+
+  return { move_figures = true, csl = "journal.csl" }
+<
+ vim:tw=78:ts=8:ft=help:norl:
