@@ -1,13 +1,13 @@
 -- :Manuscript submit [variant] [anonymous|named]: what a journal asks for, in submission/<variant>-<date>/
 --
---   manuscript.pdf             the main text, built with the variant's switches
+--   main.pdf                   the main text, built with the variant's switches (`name`: main)
 --   Appendix_S1.pdf, ...       each part after it (or none: appendices = "inline")
 --   title_page.pdf, ...        title_page.tex, cover_letter.tex, response.tex beside the root, built
---   latex/                     what compiles manuscript.pdf, and nothing else:
---     manuscript.tex             knitted, flattened (\input{}s inlined), comments out, the switches
+--   latex/                     what compiles main.pdf, and nothing else:
+--     main.tex                   knitted, flattened (\input{}s inlined), comments out, the switches
 --                                resolved in the text (an anonymous source has no authors at all)
---     figures/                   the pictures it reads, its paths rewritten
---     references.bib             only the entries it cites; manuscript.bbl
+--     figures/                   the pictures it reads, its paths rewritten (`flat`: beside main.tex)
+--     references.bib             only the entries it cites; main.bbl
 --     *.sty, *.cls...            the local packages and classes it reads
 --   <folder>-latex.zip         latex/, to upload
 --
@@ -27,7 +27,10 @@ local M = {}
 M.defaults = {
   appendices = "separate", -- each part after the main text in its own PDF; "inline": one document
   appendix_name = "Appendix_S%d", -- their PDFs' names
+  name = "main", -- main.tex, main.bbl, main.pdf
   figures = "names", -- in latex/figures/ under their names; "numbered": fig1.pdf, fig2.png...
+  flat = false, -- true: the figures beside main.tex (some submission systems, Elsevier's Editorial
+  -- Manager, take no folders)
   comments = false, -- true: comments stay in the source
   extras = { "title_page", "cover_letter", "response" }, -- .tex files beside the root, built into PDFs
   changes = true, -- a resubmission: the tracked changes since the last one with this variant
@@ -95,9 +98,10 @@ local function commands(text, cmd)
 end
 
 -- The figures of `tex` (its \includegraphics{}), among the files the build read: their paths
--- rewritten to figures/<name>, and { [file] = name } to copy. numbered: fig1.pdf... (a path made
--- in a macro, growth_#1, keeps its files' names: they are all copied).
-function M.figures(tex, read, dir, numbered)
+-- rewritten to figures/<name> (flat: <name>), and { [file] = name } to copy. numbered: fig1.pdf...
+-- (a path made in a macro, growth_#1, keeps its files' names: they are all copied).
+function M.figures(tex, read, dir, numbered, flat)
+  local folder = flat and "" or "figures/"
   local images = {}
   for _, path in ipairs(read) do
     if IMAGE[ext(path)] then
@@ -151,10 +155,10 @@ function M.figures(tex, read, dir, numbered)
           name_for(path, true)
         end
       end
-      new = "figures/" .. vim.fs.basename(p)
+      new = folder .. vim.fs.basename(p)
     else
       local full = resolve(p)
-      new = full and "figures/" .. name_for(full)
+      new = full and folder .. name_for(full)
     end
     if new then
       out[#out + 1] = tex:sub(last, c.arg_s - 1) .. new
@@ -163,7 +167,7 @@ function M.figures(tex, read, dir, numbered)
   end
   out[#out + 1] = tex:sub(last)
   tex = table.concat(out)
-  for _, g in ipairs(commands(tex, "graphicspath")) do -- (no longer needed: the paths are figures/)
+  for _, g in ipairs(commands(tex, "graphicspath")) do -- (no longer needed: the paths are the bundle's)
     tex = tex:sub(1, g.s - 1) .. tex:sub(g.e + 1)
   end
   return tex, copies
@@ -450,8 +454,9 @@ function M.run(args, on_done)
         job.fail(("the main text has LaTeX errors: %d in the quickfix list"):format(#errors))
       end
       local outdir = vim.fs.joinpath(project.dir, ".build", target)
-      assert(vim.uv.fs_copyfile(vim.fs.joinpath(outdir, job_name .. ".pdf"), vim.fs.joinpath(folder, "manuscript.pdf")))
-      local pdfs = { vim.fs.joinpath(folder, "manuscript.pdf") }
+      local main_name = settings.name
+      assert(vim.uv.fs_copyfile(vim.fs.joinpath(outdir, job_name .. ".pdf"), vim.fs.joinpath(folder, main_name .. ".pdf")))
+      local pdfs = { vim.fs.joinpath(folder, main_name .. ".pdf") }
 
       -- 2. the appendices, each its own PDF
       local k = 0
@@ -503,10 +508,11 @@ function M.run(args, on_done)
       local home = vim.trim(job.run({ "kpsewhich", "-var-value", "TEXMFHOME" }).stdout or "")
       local read = M.inputs(vim.fs.joinpath(outdir, job_name .. ".fls"), project.dir, vim.fs.normalize(home))
       local copies
-      text, copies = M.figures(text, read, project.dir, settings.figures == "numbered")
+      text, copies = M.figures(text, read, project.dir, settings.figures == "numbered", settings.flat)
+      local figures_in = settings.flat and src or vim.fs.joinpath(src, "figures")
       for path, fig in pairs(copies) do
-        vim.fn.mkdir(vim.fs.joinpath(src, "figures"), "p")
-        assert(vim.uv.fs_copyfile(path, vim.fs.joinpath(src, "figures", fig)))
+        vim.fn.mkdir(figures_in, "p")
+        assert(vim.uv.fs_copyfile(path, vim.fs.joinpath(figures_in, fig)))
       end
       for _, path in ipairs(read) do
         if SUPPORT[ext(path)] then
@@ -517,10 +523,10 @@ function M.run(args, on_done)
       local cited = bbl and bib.cited(bbl) or {}
       if #cited > 0 then
         write(vim.fs.joinpath(src, "references.bib"), bib.subset(project.bibs, cited))
-        write(vim.fs.joinpath(src, "manuscript.bbl"), bbl)
+        write(vim.fs.joinpath(src, main_name .. ".bbl"), bbl)
         text = M.bibliography(text)
       end
-      write(vim.fs.joinpath(src, "manuscript.tex"), text)
+      write(vim.fs.joinpath(src, main_name .. ".tex"), text)
 
       -- 5. it compiles on its own (elsewhere), into as many pages
       job.range(65, 85)
@@ -529,16 +535,16 @@ function M.run(args, on_done)
       vim.fn.mkdir(check, "p")
       job.run({ "cp", "-r", src .. "/.", check })
       job.run({ "latexmk", require("manuscript").latexmk_flag(knit.engine(project)), "-interaction=nonstopmode",
-        "manuscript.tex" }, { cwd = check, env = { TEXMFHOME = check .. "/.none" } }) -- (as a journal: without your packages)
-      local e = build.errors(vim.fs.joinpath(check, "manuscript.log"), vim.fs.joinpath(src, "manuscript.tex"))
+        main_name .. ".tex" }, { cwd = check, env = { TEXMFHOME = check .. "/.none" } }) -- (as a journal: without your packages)
+      local e = build.errors(vim.fs.joinpath(check, main_name .. ".log"), vim.fs.joinpath(src, main_name .. ".tex"))
       local pages = function(pdf)
         return tonumber((job.run({ "pdfinfo", pdf }).stdout or ""):match("Pages:%s*(%d+)"))
       end
-      if #e > 0 or not vim.uv.fs_stat(vim.fs.joinpath(check, "manuscript.pdf")) then
+      if #e > 0 or not vim.uv.fs_stat(vim.fs.joinpath(check, main_name .. ".pdf")) then
         build.show(e, "manuscript submit: latex/")
         job.fail(("latex/ doesn't compile on its own (%d errors in the quickfix list; tried in %s)"):format(#e, check))
       end
-      local same = pages(vim.fs.joinpath(check, "manuscript.pdf")) == pages(pdfs[1])
+      local same = pages(vim.fs.joinpath(check, main_name .. ".pdf")) == pages(pdfs[1])
       vim.fn.delete(check, "rf")
       local zip = vim.fs.joinpath(folder, vim.fs.basename(folder) .. "-latex.zip")
       local r = job.run({ "zip", "-r", "-q", "-X", zip, "." }, { cwd = src })
@@ -590,7 +596,7 @@ function M.run(args, on_done)
       end
       local notes = {}
       if not same then
-        notes[#notes + 1] = "latex/ compiles into a different number of pages than manuscript.pdf"
+        notes[#notes + 1] = ("latex/ compiles into a different number of pages than %s.pdf"):format(main_name)
       end
       if anonymous then
         notes[#notes + 1] = #real > 0 and ("%d possible traces of the authors (quickfix)"):format(#real)

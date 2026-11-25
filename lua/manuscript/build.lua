@@ -43,24 +43,86 @@ function M.part_of(project, file)
   return own and vim.tbl_contains(project.files, file) and own or nil
 end
 
--- LaTeX's errors in a log ("! message", then "l.<line> ..."), as quickfix items in the .tex.
+-- LaTeX's errors in a log ("! message", then "l.<line> ..."), as quickfix items in the .tex. An
+-- error TeX gives no line for (an unclosed brace: "File ended while scanning use of \textbf") has
+-- the start of the runaway argument instead, from the line after "Runaway argument?": where to
+-- find it (see M.in_sources). "\begin{x} on input line N ended by ...": at line N, where it began.
+-- "Emergency stop" and the fatal error after it say nothing more: left out, when there is another.
 function M.errors(log, tex)
-  local items, current = {}, nil
-  for line in (project_.read(log) or ""):gmatch("[^\n]*") do
+  local items, noise, current, runaway, after_runaway = {}, {}, nil, nil, false
+  for _, line in ipairs(vim.split(project_.read(log) or "", "\n", { plain = true })) do
     local message = line:match("^! (.+)")
-    if message then
+    if after_runaway then
+      runaway, after_runaway = (line:gsub("\\ETC%.$", "")), false
+    elseif line == "Runaway argument?" then
+      after_runaway = true
+    elseif message then
       current = { filename = tex, lnum = 1, text = message, type = "E" }
-      items[#items + 1] = current
+      if message:match("^Emergency stop") or message:match("==> Fatal error") then
+        noise[#noise + 1] = current
+      else
+        items[#items + 1] = current
+        if runaway then -- (a } missing: no line, but where its argument starts)
+          current.start = (message:match("use of (\\%a+)") or "") .. runaway
+          current.text = message:gsub("%s*%.$", "") .. ": a } missing?"
+          runaway = nil
+        else
+          current.unplaced = true -- (until its l.<line>)
+        end
+      end
     elseif current and line:match("^l%.%d+") then -- ("l.52 ...the text up to the error")
       current.lnum, current.context = tonumber(line:match("^l%.(%d+)")), line:match("^l%.%d+ (.*)$")
+      current.unplaced = nil
+      local begun = current.text:match("on input line (%d+)") -- (\begin{x} ... ended by: where it began)
+      if begun then
+        current.lnum, current.context = tonumber(begun), nil
+      end
       current = nil
     end
   end
-  return items
+  return #items > 0 and items or noise
 end
 
--- The errors at their line in the sources, where it is there as it is in the .tex (most lines
--- are: knitting changes only chunks and \Sexpr{}); else in the .tex.
+-- Whether a source line is this knitted line: the same, but for what knitting writes in place of
+-- its \Sexpr{}s (`r ` in an .Rmd), which may be anything.
+local function alike(source, knitted)
+  source, knitted = vim.trim(source), vim.trim(knitted)
+  if source == knitted then
+    return true
+  end
+  local pieces, pos = {}, 1
+  while true do
+    local a, b = source:find("\\Sexpr%s*%b{}", pos)
+    local c, d = source:find("`r[ #][^`]*`", pos)
+    if c and (not a or c < a) then
+      a, b = c, d
+    end
+    if not a then
+      break
+    end
+    pieces[#pieces + 1] = vim.pesc(source:sub(pos, a - 1))
+    pos = b + 1
+  end
+  if #pieces == 0 then
+    return false
+  end
+  pieces[#pieces + 1] = vim.pesc(source:sub(pos))
+  return knitted:match("^" .. table.concat(pieces, ".-") .. "$") ~= nil
+end
+M.alike = alike
+
+-- Text as TeX prints it and as it is written, made comparable: no space after a control word
+-- ("\textcite {x}"), spaces as one.
+local function comparable(text)
+  return (text:gsub("(\\%a+)%s+", "%1"):gsub("%s+", " "))
+end
+
+-- The errors at their line in the sources (in order, the first way that finds it):
+--   the source line that is the .tex's (but for a \Sexpr{}'s value), with most of its neighbours
+--   the same too (a line such as \end{center} is in many places);
+--   the text just before the error (TeX's l.<line>), in the sources;
+--   from the nearest line above it that is in the sources (see M.by_neighbour);
+-- else in the .tex. One without a line (a runaway argument): where its argument starts.
 function M.in_sources(items, project)
   local files = project.files
   local cache = {}
@@ -68,32 +130,129 @@ function M.in_sources(items, project)
     cache[path] = cache[path] or vim.split(project_.read(path) or "", "\n", { plain = true })
     return cache[path]
   end
+  local function find(test, where) -- (the first line of `where` passing it: file, line)
+    for _, file in ipairs(where) do
+      for n, line in ipairs(lines(file)) do
+        if test(line) then
+          return file, n
+        end
+      end
+    end
+  end
   for _, item in ipairs(items) do
-    local text = vim.trim(lines(item.filename)[item.lnum] or "")
-    -- (or the text just before the error, if the line changed when knitted: a \Sexpr{} in it)
-    local context = vim.trim((item.context or ""):gsub("^%.%.%.", "")):sub(-30)
-    item.context = nil
-    local tests = {}
-    if #text >= 8 then -- (the same line first)
-      tests[#tests + 1] = function(line) return vim.trim(line) == text end
+    local tex, n = item.filename, item.lnum
+    local file, line
+    if item.start then -- (a runaway argument's start: to its paragraph's end, \par, and 40 characters)
+      local start = vim.trim(comparable((item.start:gsub("\\par%f[^%a].*$", ""))):sub(1, 40))
+      -- (a line that has it, or that ends while it goes on: TeX joins lines with a space)
+      local test = function(l)
+        local cl = vim.trim(comparable(l))
+        local at = #start >= 8 and cl:find(start:sub(1, 8), 1, true)
+        if not at then
+          return false
+        end
+        local rest = cl:sub(at)
+        return vim.startswith(rest, start) or (#rest >= 8 and vim.startswith(start, rest))
+      end
+      file, line = find(test, files)
+      if not file then
+        file, line = find(test, { tex })
+      end
+    elseif not item.unplaced then
+      local t = lines(tex)
+      local this = vim.trim(t[n] or "")
+      if #this >= 3 then -- (1. the same line, with the most neighbours the same)
+        local best = -1
+        for _, f in ipairs(files) do
+          local fl = lines(f)
+          for s, l in ipairs(fl) do
+            if alike(l, this) then
+              local score = 0
+              for d = -3, 3 do
+                local a, b = fl[s + d], t[n + d]
+                if d ~= 0 and a and b and vim.trim(b) ~= "" and alike(a, b) then
+                  score = score + 1
+                end
+              end
+              if score > best then
+                file, line, best = f, s, score
+              end
+            end
+          end
+        end
+        if best == 0 and #this < 20 then -- (a short line, its neighbours unlike: not enough)
+          file, line = nil, nil
+        end
+      end
+      local context = vim.trim((item.context or ""):gsub("^%.%.%.", "")):sub(-30)
+      if not file and #context >= 20 then -- (2. the text before the error: in one place only)
+        local found = {}
+        for _, f in ipairs(files) do
+          for s, l in ipairs(lines(f)) do
+            if l:find(context, 1, true) then
+              found[#found + 1] = { f, s }
+            end
+          end
+        end
+        if #found == 1 then
+          file, line = found[1][1], found[1][2]
+        end
+      end
+      if not file then -- (3. from the line above it)
+        file, line = M.by_neighbour(lines, files, tex, n)
+      end
+      if file then
+        item.text = ("%s (%s:%d)"):format(item.text, vim.fs.basename(tex), n)
+      end
     end
-    if #context >= 12 then
-      tests[#tests + 1] = function(line) return line:find(context, 1, true) ~= nil end
+    if file then
+      item.filename, item.lnum = file, line
     end
-    for _, test in ipairs(tests) do
+    item.context, item.start, item.unplaced = nil, nil, nil
+  end
+  return items
+end
+
+-- Where line `n` of the .tex is in the sources, from the nearest line above it that is there as it
+-- is, once in the .tex and once in the sources (a line such as \begin{figure} could be anywhere),
+-- the lines between them alike too: file, line; or nil (a line of a chunk's output, say).
+function M.by_neighbour(lines, files, tex, n)
+  local t = lines(tex)
+  local function count(list, text)
+    local c = 0
+    for _, l in ipairs(list) do
+      c = c + (vim.trim(l) == text and 1 or 0)
+    end
+    return c
+  end
+  for k = n - 1, math.max(1, n - 40), -1 do
+    local above = vim.trim(t[k] or "")
+    local in_sources = 0
+    if #above >= 8 and count(t, above) == 1 then
       for _, file in ipairs(files) do
-        for n, line in ipairs(lines(file)) do
-          if test(line) then
-            item.text = ("%s (%s:%d)"):format(item.text, vim.fs.basename(item.filename), item.lnum)
-            item.filename, item.lnum = file, n
-            goto found
+        in_sources = in_sources + count(lines(file), above)
+      end
+    end
+    if in_sources == 1 then
+      for _, file in ipairs(files) do
+        local f = lines(file)
+        for s, line in ipairs(f) do
+          if vim.trim(line) == above and f[s + (n - k)] then
+            local same = true
+            for d = 1, n - k - 1 do
+              if not alike(f[s + d] or "", t[k + d] or "") then
+                same = false
+                break
+              end
+            end
+            if same then
+              return file, s + (n - k)
+            end
           end
         end
       end
     end
-    ::found::
   end
-  return items
 end
 
 function M.show(items, title)

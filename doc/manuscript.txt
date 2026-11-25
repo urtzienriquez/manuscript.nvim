@@ -358,21 +358,21 @@ SUBMIT                                                     *manuscript-submit*
 :Manuscript submit [{variant}] [anonymous|named] makes what a journal asks
 for, in a new folder submission/<variant>-<date>/:
 
-  manuscript.pdf          the main text (the part "main", or the first),
+  main.pdf                the main text (the part "main", or the first),
                           built with the variant's switches
   Appendix_S1.pdf, ...    each other part, its own PDF
   title_page.pdf, ...     title_page.tex, cover_letter.tex and response.tex
                           beside the root, if there, built (named: they
                           have the authors)
-  latex/                  what compiles manuscript.pdf, and nothing else:
-    manuscript.tex          knitted, its `\input{}`s inlined, its comments
+  latex/                  what compiles main.pdf, and nothing else:
+    main.tex                knitted, its `\input{}`s inlined, its comments
                             out, the switches resolved in the text: an
                             anonymous source has no authors at all, not even
                             in a branch TeX would skip
     figures/                the pictures it reads (those a macro makes too:
                             `\includegraphics{panels/p_#1}`), paths rewritten
     references.bib          only the entries it cites (and their crossref),
-                            from all its .bib files; and manuscript.bbl
+                            from all its .bib files; and main.bbl
     *.sty, *.cls            the local packages and classes it reads (yours
                             in TEXMFHOME too: a journal doesn't have them)
   <folder>-latex.zip      latex/, to upload
@@ -393,9 +393,12 @@ key, though it names an author, isn't searched.
 A variant's `submit` table changes how: >lua
 
   submit = {
+    name = "main",                 -- main.tex, main.bbl, main.pdf
     appendices = "separate",       -- or "inline": one document
     appendix_name = "Appendix_S%d",
     figures = "names",             -- or "numbered": fig1.pdf, fig2.png...
+    flat = false,                  -- true: figures beside main.tex, no
+                                   -- folder (Elsevier's Editorial Manager)
     comments = false,              -- true: they stay in the source
     extras = { "title_page", "cover_letter", "response" },
   }

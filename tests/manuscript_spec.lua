@@ -1131,7 +1131,7 @@ describe("a submission", function()
     vim.fn.setqflist({}, " ", { title = "none", items = {} })
     assert.is_true(go({ "anon" }), why())
     local folder = dir .. "/submission/anon-" .. os.date("%Y-%m-%d")
-    local src = read(folder .. "/latex/manuscript.tex")
+    local src = read(folder .. "/latex/main.tex")
     assert.falsy(src:find("Lopezgarcia", 1, true), src)
     assert.falsy(src:find("ana.lopez", 1, true))
     assert.falsy(src:find("ask Ana", 1, true)) -- (the comment)
@@ -1145,13 +1145,13 @@ describe("a submission", function()
     assert.truthy(refs:find("smith2020", 1, true))
     assert.falsy(refs:find("unused2000", 1, true) or refs:find("jones2019", 1, true)) -- (cited by the appendix only)
     for _, f in ipairs({ "latex/figures/fig1.pdf", "latex/figures/p_a.pdf", "latex/figures/p_b.pdf", "latex/mystyle.sty",
-      "latex/manuscript.bbl", "manuscript.pdf", "Appendix_S1.pdf", "title_page.pdf", "anon-" .. os.date("%Y-%m-%d") .. "-latex.zip" }) do
+      "latex/main.bbl", "main.pdf", "Appendix_S1.pdf", "title_page.pdf", "anon-" .. os.date("%Y-%m-%d") .. "-latex.zip" }) do
       assert.truthy(vim.uv.fs_stat(folder .. "/" .. f), f)
     end
     assert.truthy(text_of(folder .. "/Appendix_S1.pdf"):find("Only in the appendix", 1, true))
     assert.truthy(text_of(folder .. "/title_page.pdf"):find("Ana Lopezgarcia", 1, true)) -- (named)
     assert.same({}, vim.fn.glob(dir .. "/*-anon.pdf", true, true)) -- (its PDFs: in the submission only)
-    local pdf = text_of(folder .. "/manuscript.pdf")
+    local pdf = text_of(folder .. "/main.pdf")
     assert.falsy(pdf:find("Lopezgarcia", 1, true), pdf)
     assert.truthy(pdf:find("The thing", 1, true))
     vim.wait(100)
@@ -1183,11 +1183,30 @@ describe("a submission", function()
     assert.equals("manuscript submit: anonymity", vim.fn.getqflist({ title = true }).title)
     local items = vim.fn.getqflist()
     assert.truthy(vim.iter(items):any(function(i) return i.text:find("in the source", 1, true) end))
-    assert.truthy(vim.iter(items):any(function(i) return i.text:find("manuscript.pdf, its text", 1, true) end))
+    assert.truthy(vim.iter(items):any(function(i) return i.text:find("main.pdf, its text", 1, true) end))
     assert.is_true(go({ "named" }), why())
-    local src = read(dir .. "/submission/manuscript-named-" .. os.date("%Y-%m-%d") .. "/latex/manuscript.tex")
+    local src = read(dir .. "/submission/manuscript-named-" .. os.date("%Y-%m-%d") .. "/latex/main.tex")
     assert.truthy(src:find("\\author{Ana Lopezgarcia", 1, true))
     assert.truthy(src:find("We thank the Lopezgarcia lab.", 1, true))
+  end)
+
+  it("flat (a journal that takes no folders): the figures beside main.tex; under another name", function()
+    if not ready() then
+      return pending("needs latexmk, pdflatex, biber, pdftotext and zip")
+    end
+    local dir = paper()
+    write(dir .. "/.manuscript.lua", 'return { latex = "pdflatex", variants = { em = { submit = { flat = true, name = "paper" } } } }')
+    vim.cmd.edit(dir .. "/paper.tex")
+    assert.is_true(go({ "em" }), why())
+    local folder = dir .. "/submission/em-" .. os.date("%Y-%m-%d")
+    local src = read(folder .. "/latex/paper.tex")
+    assert.truthy(src:find("{fig1.pdf}", 1, true), src)
+    assert.truthy(src:find("{p_#1}", 1, true))
+    assert.falsy(src:find("figures/", 1, true))
+    for _, f in ipairs({ "latex/fig1.pdf", "latex/p_a.pdf", "latex/paper.bbl", "paper.pdf" }) do
+      assert.truthy(vim.uv.fs_stat(folder .. "/" .. f), f)
+    end
+    assert.is_nil(vim.uv.fs_stat(folder .. "/latex/figures"))
   end)
 
   it("fails when its source doesn't compile on its own", function()
@@ -1286,5 +1305,61 @@ describe("a worker", function()
     assert.equals("knitted\n", read(dir .. "/out.tex"))
     assert.same({ "  | a chunk" }, lines)
     require("manuscript.worker").stop(dir)
+  end)
+end)
+
+describe("LaTeX's errors, in the sources", function()
+  local build = require("manuscript.build")
+  local function place(log, tex, sources)
+    local dir = vim.fn.tempname()
+    write(dir .. "/x.log", log)
+    write(dir .. "/x.tex", tex)
+    local files = {}
+    for name, text in pairs(sources) do
+      write(dir .. "/" .. name, text)
+      files[#files + 1] = dir .. "/" .. name
+    end
+    table.sort(files)
+    local items = build.in_sources(build.errors(dir .. "/x.log", dir .. "/x.tex"), { files = files })
+    return vim.tbl_map(function(i) return { vim.fs.basename(i.filename), i.lnum, i.text } end, items)
+  end
+
+  it("an unclosed brace (no line from TeX): where its argument starts; the fatal errors after it left out", function()
+    local log = table.concat({ "Runaway argument?", "{oops ran faster, as \\textcite {huey1979} expected: wi\\ETC.",
+      "! File ended while scanning use of \\textbf .", "<inserted text>", "! Emergency stop.",
+      "!  ==> Fatal error occurred, no output PDF file produced!" }, "\n")
+    local tex = "\\documentclass{article}\n\\begin{document}\nWarm \\textbf{oops ran faster, as \\textcite{huey1979} expected.\n"
+    local got = place(log, tex, { ["a.tex"] = "\\documentclass{article}\n", ["main.Rnw"] = "Intro.\n\nWarm \\textbf{oops ran faster, as \\textcite{huey1979} expected.\n" })
+    assert.same({ { "main.Rnw", 3, "File ended while scanning use of \\textbf: a } missing?" } }, got)
+  end)
+
+  it("an unclosed brace alone on its line (a blank line after it), or going on on the next line", function()
+    local tex = "\\documentclass{article}\n"
+    local log = "Runaway argument?\n{oops \\par Temperature sets the pace of ectotherms \\parencite {huey19\\ETC.\n"
+      .. "! File ended while scanning use of \\textbf .\n"
+    local got = place(log, tex, { ["main.Rnw"] = "Intro.\n\\textbf{oops\n\nTemperature sets the pace of ectotherms \\parencite{huey1979}.\n" })
+    assert.same({ "main.Rnw", 2 }, { got[1][1], got[1][2] })
+    log = "Runaway argument?\n{oops ran on Temperature sets the pace of ectotherms \\parencite {huey19\\ETC.\n"
+      .. "! File ended while scanning use of \\textbf .\n"
+    got = place(log, tex, { ["main.Rnw"] = "Intro.\nWarm \\textbf{oops ran on\nTemperature sets the pace of ectotherms.\n" })
+    assert.same({ "main.Rnw", 2 }, { got[1][1], got[1][2] })
+  end)
+
+  it("a line with a \\Sexpr{} (its value in the .tex); a line like many others: by its neighbours", function()
+    local log = "! Undefined control sequence.\nl.3 0.89$), with no \\oops\n\n! Undefined control sequence.\nl.7 \\end{center}\\oops\n"
+    local tex = "A line.\nslope 0.051~m,\n0.89$), with no \\oops pattern\nmore\nB\nC\n\\end{center}\\oops\n"
+    local main = "A line.\nslope \\Sexpr{round(b, 3)}~m,\n\\Sexpr{round(r, 2)}$), with no \\oops pattern\nmore\nB\nC\n\\end{center}\\oops\n"
+    local got = place(log, tex, { ["a_pre.tex"] = "x\n\\end{center}\\oops\ny\n", ["main.Rnw"] = main })
+    assert.same({ "main.Rnw", 3 }, { got[1][1], got[1][2] })
+    assert.same({ "main.Rnw", 7 }, { got[2][1], got[2][2] }) -- (not the preamble's, alike but alone)
+  end)
+
+  it("\\begin{x} ended by \\end{document}: where it began; a line only in the .tex stays there", function()
+    local log = "! LaTeX Error: Something's wrong--perhaps a missing \\item.\nl.4 \\begin{center}\n\n"
+      .. "! LaTeX Error: \\begin{itemize} on input line 2 ended by \\end{document}.\nl.9 \\end{document}\n"
+    local tex = "Text before it.\n\\begin{itemize}\n\\begin{figure}\n\\begin{center}\n\\includegraphics{x}\n"
+    local got = place(log, tex, { ["main.Rnw"] = "Text before it.\n\\begin{itemize}\n<<plot>>=\nplot(1)\n@\n", ["pre.tex"] = "\\begin{center}\n" })
+    assert.same({ "x.tex", 4 }, { got[1][1], got[1][2] }) -- (knitr's figure: in no source)
+    assert.same({ "main.Rnw", 2 }, { got[2][1], got[2][2] })
   end)
 end)
